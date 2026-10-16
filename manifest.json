@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.jeocrypto.launchpad",
+  "name": "Launchpad",
+  "version": "1.0.0",
+  "author": "JeoCrypto",
+  "description": "A full-screen, frosted macOS-style app grid with search, folders and an Omarchy Settings folder.",
+  "kinds": ["panel"],
+  "entryPoints": {
+    "panel": "Launchpad.qml"
+  }
+}
