@@ -1,14 +1,16 @@
-// Launchpad: a full-screen, frosted, macOS-style app grid for Omarchy.
+// Launchpad: a floating, frosted, macOS Spotlight-style app panel for Omarchy.
 //
 // An Omarchy shell "panel" plugin that loads only while open:
 //   omarchy-shell shell toggle io.github.jeocrypto.launchpad
 //
-// Shows pinned apps (shared with Glass Dock's ~/.config/glass-dock/pinned),
-// then folders grouped from each app's desktop categories, plus a Settings
-// folder that opens Omarchy's own panels and menus. Type to search; arrows,
-// Enter and Esc to navigate. Hidden apps match Omarchy's own Apps menu.
+// A rounded glass card with a search field, category chips, a row of
+// suggested apps (shared with Glass Dock's ~/.config/glass-dock/pinned) and
+// every app in alphabetical order. The Settings category opens Omarchy's own
+// panels and menus. Type to search; arrows and Enter to launch; Tab to switch
+// category; Esc to clear or close. Hidden apps match Omarchy's own Apps menu.
 
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -30,9 +32,12 @@ Item {
   // 56 px icons load at 112 device pixels on a 2x screen, below the 128 px
   // most themes ship, so they're scaled down (sharp) rather than up (soft).
   readonly property int iconSize: 56
-  readonly property int cellWidth: 116
-  readonly property int cellHeight: 112
-  readonly property int maxColumns: 7
+  readonly property int columns: 7
+  readonly property int cellWidth: 100
+  readonly property int cellHeight: 100
+  readonly property int padding: 28
+  readonly property int cardWidth: columns * cellWidth + padding * 2
+  readonly property int cardHeight: 600
 
   // ---- Theme: every colour in the active Omarchy theme's colors.toml ----
   property var palette: ({
@@ -73,7 +78,7 @@ Item {
     }
   }
 
-  // ---- Pinned apps, shared with Glass Dock ----
+  // ---- Suggested apps: Glass Dock's pinned list ----
   readonly property var defaultPinned: ["org.gnome.Nautilus", "chromium", "foot"]
   property var pinned: defaultPinned
 
@@ -84,7 +89,7 @@ Item {
     onLoadFailed: root.pinned = root.defaultPinned
   }
 
-  // ---- Settings folder: Omarchy's own panels and menus ----
+  // ---- Settings: Omarchy's own panels and menus ----
   // glyph: Nerd Font codepoint; tint: theme colour name.
   readonly property var settingsItems: [
     { kind: "setting", name: "Wi-Fi",       glyph: 0xF05A9, tint: "blue",    cmd: "omarchy-shell shell toggle omarchy.network" },
@@ -102,8 +107,10 @@ Item {
     { kind: "setting", name: "Updates",     glyph: 0xF06B0, tint: "orange",  cmd: "omarchy-menu summon update" }
   ]
 
-  // Folder order, and the desktop categories that put an app in each one.
-  readonly property var folderRules: [
+  // Category chips, in order, and the desktop categories behind each one.
+  // An app belongs to the first category it matches; apps with no category
+  // (Omarchy's web apps and TUIs) go to "Web Apps".
+  readonly property var categoryRules: [
     { name: "Settings",    categories: ["Settings"] },
     { name: "Development", categories: ["Development", "IDE"] },
     { name: "Office",      categories: ["Office"] },
@@ -120,8 +127,15 @@ Item {
     return Quickshell.iconPath(value, "application-x-executable")
   }
 
+  function categoryOf(e) {
+    const cats = e.categories || []
+    for (const r of categoryRules)
+      if (r.categories.some(c => cats.indexOf(c) !== -1)) return r.name
+    return "Web Apps"
+  }
+
   function appItem(e) {
-    return { kind: "app", id: e.id, name: e.name, icon: e.icon,
+    return { kind: "app", id: e.id, name: e.name, icon: e.icon, category: categoryOf(e),
              search: [e.name, e.genericName || "", (e.keywords || []).join(" ")].join(" ").toLowerCase() }
   }
 
@@ -132,56 +146,43 @@ Item {
     for (const e of DesktopEntries.applications.values) {
       if (!e || e.noDisplay || hiddenIds[e.id] || seen[e.id]) continue
       seen[e.id] = true
-      out.push(e)
+      out.push(appItem(e))
     }
     out.sort((a, b) => a.name.localeCompare(b.name))
     return out
   }
 
-  // Pinned apps first, then folders. Single-app folders show the app itself.
-  readonly property var topItems: {
-    const pinnedEntries = []
-    const pinnedIds = {}
+  readonly property var suggested: {
+    const out = []
+    const seen = {}
     for (const id of pinned) {
       const e = DesktopEntries.byId(id) || DesktopEntries.heuristicLookup(id)
-      if (e && !pinnedIds[e.id]) { pinnedIds[e.id] = true; pinnedEntries.push(appItem(e)) }
+      if (e && !seen[e.id] && !hiddenIds[e.id]) { seen[e.id] = true; out.push(appItem(e)) }
+      if (out.length === columns) break
     }
-
-    const folders = folderRules.map(r => ({ kind: "folder", name: r.name, items: [] }))
-    const webApps = { kind: "folder", name: "Web Apps", items: [] }
-    folders[0].items = settingsItems.slice()
-
-    for (const e of apps) {
-      if (pinnedIds[e.id]) continue
-      const cats = e.categories || []
-      let placed = false
-      for (let i = 0; i < folderRules.length && !placed; i++) {
-        if (folderRules[i].categories.some(c => cats.indexOf(c) !== -1)) {
-          folders[i].items.push(appItem(e))
-          placed = true
-        }
-      }
-      if (!placed) webApps.items.push(appItem(e))
-    }
-    folders.push(webApps)
-
-    const loose = []
-    const kept = []
-    for (const f of folders) {
-      if (f.items.length === 1) loose.push(f.items[0])
-      else if (f.items.length > 1) kept.push(f)
-    }
-    loose.sort((a, b) => a.name.localeCompare(b.name))
-    return pinnedEntries.concat(loose, kept)
+    return out
   }
 
-  // ---- Search ----
+  // "All", then every category that has something in it.
+  readonly property var chips: {
+    const out = ["All"]
+    for (const r of categoryRules.concat([{ name: "Web Apps" }])) {
+      if (r.name === "Settings" || apps.some(a => a.category === r.name)) out.push(r.name)
+    }
+    return out
+  }
+
+  // ---- State ----
   property string query: ""
+  property string chip: "All"
+  property int currentIndex: 0
+
+  readonly property bool searching: query.trim() !== ""
 
   readonly property var results: {
     const q = query.trim().toLowerCase()
     if (!q) return []
-    const pool = apps.map(appItem).concat(settingsItems.map(s => Object.assign({ search: s.name.toLowerCase() }, s)))
+    const pool = apps.concat(settingsItems.map(s => Object.assign({ search: s.name.toLowerCase() }, s)))
     const scored = []
     for (const item of pool) {
       const name = item.name.toLowerCase()
@@ -196,20 +197,36 @@ Item {
     return scored.map(s => s.item)
   }
 
-  // ---- State ----
-  property var openFolder: null
-  property int currentIndex: 0
-  property int folderIndex: 0
+  // True while the first grid row is the suggested row (with a divider below).
+  readonly property bool showSuggested: !searching && chip === "All" && suggested.length > 0
 
-  readonly property var gridItems: query.trim() ? results : topItems
+  // The grid model. The suggested row is padded with spacers to a full row so
+  // the alphabetical list always starts on a fresh row under the divider.
+  readonly property var gridItems: {
+    if (searching) return results
+    if (chip === "Settings") return settingsItems.concat(apps.filter(a => a.category === "Settings"))
+    if (chip !== "All") return apps.filter(a => a.category === chip)
+    if (!showSuggested) return apps
+    const row = suggested.slice()
+    while (row.length < columns) row.push({ kind: "spacer", name: "" })
+    return row.concat(apps)
+  }
 
-  onQueryChanged: currentIndex = 0
+  onQueryChanged: currentIndex = firstSelectable(0, 1)
+  onChipChanged: currentIndex = firstSelectable(0, 1)
+
+  function selectable(i) { return i >= 0 && i < gridItems.length && gridItems[i].kind !== "spacer" }
+
+  function firstSelectable(from, step) {
+    for (let i = from; i >= 0 && i < gridItems.length; i += step) if (selectable(i)) return i
+    return -1
+  }
 
   function open(payloadJson) {
     themeColors.reload()
     query = ""
-    openFolder = null
-    currentIndex = 0
+    chip = "All"
+    currentIndex = firstSelectable(0, 1)
     opened = true
   }
 
@@ -224,32 +241,29 @@ Item {
   }
 
   function activate(item) {
-    if (!item) return
-    if (item.kind === "folder") {
-      openFolder = item
-      folderIndex = 0
-      return
-    }
+    if (!item || item.kind === "spacer") return
     if (item.kind === "app") Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.id])
     else if (item.kind === "setting") Quickshell.execDetached(["bash", "-lc", item.cmd])
     dismiss()
   }
 
-  function columnsFor(width, count) {
-    return Math.max(1, Math.min(maxColumns, Math.floor(width / cellWidth), count))
+  function move(dx, dy) {
+    if (currentIndex < 0) { currentIndex = firstSelectable(0, 1); return }
+    let next = currentIndex + dx + dy * columns
+    next = Math.max(0, Math.min(gridItems.length - 1, next))
+    // Skip spacers in the suggested row, in the direction of travel.
+    if (!selectable(next)) next = firstSelectable(next, dx < 0 || dy < 0 ? -1 : 1)
+    if (next < 0) next = firstSelectable(currentIndex + (dy > 0 ? columns : 0), 1)
+    if (next >= 0) {
+      currentIndex = next
+      grid.positionViewAtIndex(currentIndex, GridView.Contain)
+    }
   }
 
-  function move(dx, dy) {
-    if (openFolder) {
-      const n = openFolder.items.length
-      const cols = folderGrid.columns
-      folderIndex = Math.max(0, Math.min(n - 1, folderIndex + dx + dy * cols))
-    } else {
-      const n = gridItems.length
-      const cols = mainGrid.columns
-      currentIndex = Math.max(0, Math.min(n - 1, currentIndex + dx + dy * cols))
-      mainGrid.positionViewAtIndex(currentIndex, GridView.Contain)
-    }
+  function cycleChip(step) {
+    query = ""
+    const i = chips.indexOf(chip)
+    chip = chips[(i + step + chips.length) % chips.length]
   }
 
   PanelWindow {
@@ -262,63 +276,75 @@ Item {
     WlrLayershell.namespace: "launchpad"
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
-    onVisibleChanged: if (visible) { content.opacity = 0; content.scale = 0.98; appear.start(); search.forceActiveFocus() }
+    onVisibleChanged: if (visible) { card.opacity = 0; card.scale = 0.96; appear.start(); search.forceActiveFocus() }
 
-    // Frosted backdrop (Hyprland blurs the "launchpad" layer); click to close.
-    Rectangle {
+    // Clicking anywhere outside the card closes it.
+    MouseArea {
       anchors.fill: parent
-      color: root.alpha(root.bg, 0.55)
-      MouseArea {
-        anchors.fill: parent
-        onClicked: root.openFolder ? root.openFolder = null : root.dismiss()
-      }
+      onClicked: root.dismiss()
     }
 
-    Item {
-      id: content
-      anchors.fill: parent
+    Rectangle {
+      id: card
+      anchors.centerIn: parent
+      width: root.cardWidth
+      height: root.cardHeight
+      radius: 28
+      // Hyprland blurs the "launchpad" layer behind the card (ignore_alpha
+      // skips the transparent area around it).
+      color: root.alpha(root.bg, 0.78)
+      border.width: 0.5
+      border.color: root.alpha(root.fg, 0.16)
       transformOrigin: Item.Center
+
+      layer.enabled: true
+      layer.effect: MultiEffect {
+        shadowEnabled: true
+        shadowColor: "#000000"
+        shadowOpacity: 0.45
+        shadowBlur: 1.0
+        shadowVerticalOffset: 12
+        autoPaddingEnabled: true
+      }
 
       ParallelAnimation {
         id: appear
-        NumberAnimation { target: content; property: "opacity"; to: 1; duration: 160; easing.type: Easing.OutCubic }
-        NumberAnimation { target: content; property: "scale"; to: 1; duration: 200; easing.type: Easing.OutCubic }
+        NumberAnimation { target: card; property: "opacity"; to: 1; duration: 150; easing.type: Easing.OutCubic }
+        NumberAnimation { target: card; property: "scale"; to: 1; duration: 190; easing.type: Easing.OutCubic }
       }
 
-      // ---- Search field ----
-      Rectangle {
-        id: searchBox
-        anchors.horizontalCenter: parent.horizontalCenter
-        y: 64
-        width: 440
-        height: 40
-        radius: 20
-        color: root.alpha(root.fg, 0.08)
-        border.width: 0.5
-        border.color: root.alpha(root.fg, 0.16)
+      // Swallow clicks on the card itself.
+      MouseArea { anchors.fill: parent }
+
+      // ---- Header: search ----
+      Item {
+        id: header
+        x: root.padding
+        y: 20
+        width: parent.width - root.padding * 2
+        height: 36
 
         Text {
           id: glass
           anchors.verticalCenter: parent.verticalCenter
-          x: 16
           text: String.fromCodePoint(0xF0349)
-          color: root.alpha(root.fg, 0.55)
+          color: root.alpha(root.fg, 0.6)
           font.family: "monospace"
-          font.pixelSize: 16
+          font.pixelSize: 20
         }
 
         TextInput {
           id: search
           anchors.verticalCenter: parent.verticalCenter
           anchors.left: glass.right
-          anchors.leftMargin: 10
-          anchors.right: parent.right
-          anchors.rightMargin: 16
+          anchors.leftMargin: 12
+          anchors.right: closeButton.left
+          anchors.rightMargin: 12
           focus: true
           color: root.fg
           selectionColor: root.alpha(root.accent, 0.45)
           font.family: "sans-serif"
-          font.pixelSize: 15
+          font.pixelSize: 22
           clip: true
           text: root.query
           onTextEdited: root.query = text
@@ -326,136 +352,149 @@ Item {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             visible: !search.text
-            text: "Search"
-            color: root.alpha(root.fg, 0.45)
+            text: "Search apps"
+            color: root.alpha(root.fg, 0.4)
             font: search.font
           }
 
           Keys.onPressed: (e) => {
             if (e.key === Qt.Key_Escape) {
-              if (root.openFolder) root.openFolder = null
-              else if (root.query) root.query = ""
+              if (root.query) root.query = ""
+              else if (root.chip !== "All") root.chip = "All"
               else root.dismiss()
-            } else if (e.key === Qt.Key_Left) root.move(-1, 0)
+            } else if (e.key === Qt.Key_Tab) root.cycleChip(1)
+            else if (e.key === Qt.Key_Backtab) root.cycleChip(-1)
+            else if (e.key === Qt.Key_Left) root.move(-1, 0)
             else if (e.key === Qt.Key_Right) root.move(1, 0)
             else if (e.key === Qt.Key_Up) root.move(0, -1)
             else if (e.key === Qt.Key_Down) root.move(0, 1)
-            else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
-              if (root.openFolder) root.activate(root.openFolder.items[root.folderIndex])
-              else root.activate(root.gridItems[root.currentIndex])
-            } else return
+            else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) root.activate(root.gridItems[root.currentIndex])
+            else return
             e.accepted = true
+          }
+        }
+
+        // Close button
+        Rectangle {
+          id: closeButton
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 28; height: 28; radius: 14
+          color: root.alpha(root.fg, closeHover.hovered ? 0.14 : 0.07)
+          Text {
+            anchors.centerIn: parent
+            text: String.fromCodePoint(0xF0156)
+            color: root.alpha(root.fg, 0.7)
+            font.family: "monospace"
+            font.pixelSize: 14
+          }
+          HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
+          MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+        }
+      }
+
+      // ---- Category chips ----
+      Flickable {
+        id: chipStrip
+        x: root.padding
+        y: header.y + header.height + 14
+        width: parent.width - root.padding * 2
+        height: 30
+        contentWidth: chipRow.width
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.HorizontalFlick
+
+        Row {
+          id: chipRow
+          spacing: 8
+          Repeater {
+            model: root.chips
+            Rectangle {
+              id: chipItem
+              required property string modelData
+              readonly property bool active: !root.searching && root.chip === modelData
+              height: 30
+              width: chipLabel.implicitWidth + 28
+              radius: 15
+              color: active ? root.alpha(root.accent, 0.9) : root.alpha(root.fg, chipHover.hovered ? 0.13 : 0.08)
+              Behavior on color { ColorAnimation { duration: 120 } }
+              onActiveChanged: if (active) chipStrip.contentX = Math.max(0, Math.min(x - 40, chipStrip.contentWidth - chipStrip.width))
+
+              Text {
+                id: chipLabel
+                anchors.centerIn: parent
+                text: chipItem.modelData
+                color: chipItem.active ? root.bg : root.alpha(root.fg, 0.85)
+                font.family: "sans-serif"
+                font.pixelSize: 13
+                font.weight: chipItem.active ? Font.DemiBold : Font.Normal
+              }
+              HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea { anchors.fill: parent; onClicked: { root.query = ""; root.chip = chipItem.modelData } }
+            }
           }
         }
       }
 
-      // ---- Main grid ----
+      // ---- App grid ----
       GridView {
-        id: mainGrid
-        readonly property int columns: root.columnsFor(parent.width - 160, root.gridItems.length)
-        anchors.top: searchBox.bottom
-        anchors.topMargin: 48
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 48
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: columns * root.cellWidth
+        id: grid
+        x: root.padding
+        y: chipStrip.y + chipStrip.height + 14
+        width: root.columns * root.cellWidth
+        height: parent.height - y - 16
         cellWidth: root.cellWidth
         cellHeight: root.cellHeight
         clip: true
-        interactive: contentHeight > height
         boundsBehavior: Flickable.StopAtBounds
         model: root.gridItems
-        visible: root.gridItems.length > 0
-        // Fade the grid behind an open folder, like macOS
-        opacity: root.openFolder ? 0.15 : 1
-        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        // Hairline under the suggested row
+        Rectangle {
+          parent: grid.contentItem
+          visible: root.showSuggested
+          x: 8
+          y: root.cellHeight - 1
+          width: grid.width - 16
+          height: 0.5
+          color: root.alpha(root.fg, 0.16)
+        }
 
         delegate: Tile {
           required property var modelData
           required property int index
           item: modelData
-          current: !root.openFolder && index === root.currentIndex
-          onHovered: if (!root.openFolder) root.currentIndex = index
+          current: index === root.currentIndex
+          onHovered: if (root.selectable(index)) root.currentIndex = index
           onActivated: root.activate(modelData)
         }
       }
 
+      // Thin scroll indicator
+      Rectangle {
+        visible: grid.contentHeight > grid.height
+        x: parent.width - 10
+        y: grid.y + grid.visibleArea.yPosition * grid.height
+        width: 3
+        height: Math.max(24, grid.visibleArea.heightRatio * grid.height)
+        radius: 1.5
+        color: root.alpha(root.fg, 0.3)
+      }
+
       Text {
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: searchBox.bottom
-        anchors.topMargin: 80
-        visible: root.query.trim() !== "" && root.results.length === 0
+        y: grid.y + 40
+        visible: root.searching && root.results.length === 0
         text: "No results"
         color: root.alpha(root.fg, 0.5)
         font.family: "sans-serif"
         font.pixelSize: 15
       }
-
-      // ---- Open folder ----
-      Rectangle {
-        anchors.fill: parent
-        visible: root.openFolder !== null
-        color: root.alpha(root.bg, 0.35)
-
-        MouseArea {
-          anchors.fill: parent
-          onClicked: root.openFolder = null
-        }
-
-        Rectangle {
-          id: folderCard
-          anchors.centerIn: parent
-          width: folderGrid.width + 48
-          height: folderTitle.height + folderGrid.height + 64
-          radius: 24
-          color: root.alpha(root.bg, 0.96)
-          border.width: 0.5
-          border.color: root.alpha(root.fg, 0.14)
-
-          MouseArea { anchors.fill: parent }
-
-          Text {
-            id: folderTitle
-            anchors.horizontalCenter: parent.horizontalCenter
-            y: 20
-            text: root.openFolder ? root.openFolder.name : ""
-            color: root.fg
-            font.family: "sans-serif"
-            font.pixelSize: 18
-            font.weight: Font.DemiBold
-          }
-
-          GridView {
-            id: folderGrid
-            readonly property var items: root.openFolder ? root.openFolder.items : []
-            readonly property int columns: root.columnsFor(window.width - 240, Math.min(5, items.length))
-            readonly property int rows: Math.ceil(items.length / Math.max(1, columns))
-            x: 24
-            anchors.top: folderTitle.bottom
-            anchors.topMargin: 20
-            width: columns * root.cellWidth
-            height: Math.min(rows, 4) * root.cellHeight
-            cellWidth: root.cellWidth
-            cellHeight: root.cellHeight
-            clip: true
-            interactive: rows > 4
-            model: items
-
-            delegate: Tile {
-              required property var modelData
-              required property int index
-              item: modelData
-              current: index === root.folderIndex
-              onHovered: root.folderIndex = index
-              onActivated: root.activate(modelData)
-            }
-          }
-        }
-      }
     }
   }
 
-  // ---- One grid cell: app, setting or folder ----
+  // ---- One grid cell: app or setting ----
   component Tile: Item {
     id: tile
     property var item: null
@@ -463,98 +502,60 @@ Item {
     signal hovered()
     signal activated()
 
+    readonly property bool isSpacer: !item || item.kind === "spacer"
     width: root.cellWidth
     height: root.cellHeight
 
     Rectangle {
-      x: 8; y: 4
-      width: parent.width - 16
-      height: parent.height - 8
-      radius: 16
+      visible: !tile.isSpacer
+      x: 6; y: 2
+      width: parent.width - 12
+      height: parent.height - 6
+      radius: 14
       color: root.alpha(root.fg, tile.current ? 0.12 : 0)
       Behavior on color { ColorAnimation { duration: 100 } }
     }
 
-    // App icon
     IconImage {
       visible: tile.item && tile.item.kind === "app"
       x: (parent.width - root.iconSize) / 2
-      y: 12
+      y: 8
       implicitSize: root.iconSize
       source: visible ? root.iconSource(tile.item.icon) : ""
       asynchronous: true
     }
 
-    // Settings tile: coloured rounded square with a vector glyph
     GlyphTile {
       visible: tile.item && tile.item.kind === "setting"
       x: (parent.width - root.iconSize) / 2
-      y: 12
+      y: 8
       size: root.iconSize
       setting: visible ? tile.item : null
     }
 
-    // Folder: frosted square with up to four miniatures
-    Rectangle {
-      visible: tile.item && tile.item.kind === "folder"
-      x: (parent.width - root.iconSize) / 2
-      y: 12
-      width: root.iconSize
-      height: root.iconSize
-      radius: 16
-      color: root.alpha(root.fg, 0.14)
-      border.width: 0.5
-      border.color: root.alpha(root.fg, 0.18)
-
-      Grid {
-        anchors.centerIn: parent
-        columns: 2
-        spacing: 4
-        Repeater {
-          model: tile.item && tile.item.kind === "folder" ? tile.item.items.slice(0, 4) : []
-          Item {
-            required property var modelData
-            width: 22; height: 22
-            IconImage {
-              visible: modelData.kind === "app"
-              anchors.fill: parent
-              implicitSize: 22
-              source: visible ? root.iconSource(modelData.icon) : ""
-              asynchronous: true
-            }
-            GlyphTile {
-              visible: modelData.kind === "setting"
-              size: 22
-              setting: visible ? modelData : null
-            }
-          }
-        }
-      }
-    }
-
     Text {
-      x: 8
-      y: 12 + root.iconSize + 8
-      width: parent.width - 16
+      visible: !tile.isSpacer
+      x: 4
+      y: 8 + root.iconSize + 7
+      width: parent.width - 8
       text: tile.item ? tile.item.name : ""
       color: root.fg
       horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.WordWrap
-      maximumLineCount: 2
       elide: Text.ElideRight
       font.family: "sans-serif"
       font.pixelSize: 12
     }
 
     MouseArea {
+      enabled: !tile.isSpacer
       anchors.fill: parent
-      hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: tile.activated()
     }
 
     // MouseArea hover doesn't fire for warped pointers; HoverHandler does.
     HoverHandler {
+      enabled: !tile.isSpacer
       onHoveredChanged: if (hovered) tile.hovered()
     }
   }
@@ -562,7 +563,7 @@ Item {
   component GlyphTile: Rectangle {
     id: glyphTile
     property var setting: null
-    property int size: 64
+    property int size: 56
     width: size
     height: size
     radius: Math.round(size / 4)

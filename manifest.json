@@ -4,7 +4,7 @@
   "name": "Launchpad",
   "version": "1.0.0",
   "author": "JeoCrypto",
-  "description": "A full-screen, frosted macOS-style app grid with search, folders and an Omarchy Settings folder.",
+  "description": "A floating, frosted, macOS Spotlight-style app panel with search, categories and an Omarchy Settings section.",
   "kinds": ["panel"],
   "entryPoints": {
     "panel": "Launchpad.qml"
