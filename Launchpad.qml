@@ -136,6 +136,7 @@ Item {
 
   function appItem(e) {
     return { kind: "app", id: e.id, name: e.name, icon: e.icon, category: categoryOf(e),
+             generic: String(e.genericName || "").toLowerCase(),
              search: [e.name, e.genericName || "", (e.keywords || []).join(" ")].join(" ").toLowerCase() }
   }
 
@@ -188,6 +189,8 @@ Item {
       const name = item.name.toLowerCase()
       let score = -1
       if (name.startsWith(q)) score = 0
+      // "calc" should find the Calculator (generic name) as readily as LibreOffice Calc
+      else if ((item.generic || "").startsWith(q)) score = 0
       else if (name.split(/[\s\-_.]+/).some(w => w.startsWith(q))) score = 1
       else if (name.includes(q)) score = 2
       else if (item.search.includes(q)) score = 3
