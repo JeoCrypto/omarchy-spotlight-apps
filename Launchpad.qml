@@ -94,7 +94,7 @@ Item {
     { kind: "setting", name: "Background",  glyph: 0xF0E09, tint: "magenta", cmd: "omarchy-menu summon style.background" },
     { kind: "setting", name: "Font",        glyph: 0xF0B34, tint: "yellow",  cmd: "omarchy-menu summon style.font" },
     { kind: "setting", name: "Keybindings", glyph: 0xF030C, tint: "magenta", cmd: "omarchy-menu summon setup.keybindings" },
-    { kind: "setting", name: "Monitors",    glyph: 0xF0379, tint: "cyan",    cmd: "omarchy-menu summon setup.monitors" },
+    { kind: "setting", name: "Monitors",    glyph: 0xF037A, tint: "cyan",    cmd: "omarchy-menu summon setup.monitors" },
     { kind: "setting", name: "Input",       glyph: 0xF037D, tint: "green",   cmd: "omarchy-menu summon setup.input" },
     { kind: "setting", name: "Setup",       glyph: 0xF0493, tint: "accent",  cmd: "omarchy-menu summon setup" },
     { kind: "setting", name: "Updates",     glyph: 0xF06B0, tint: "orange",  cmd: "omarchy-menu summon update" }
@@ -364,6 +364,9 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         model: root.gridItems
         visible: root.gridItems.length > 0
+        // Fade the grid behind an open folder, like macOS
+        opacity: root.openFolder ? 0.15 : 1
+        Behavior on opacity { NumberAnimation { duration: 140 } }
 
         delegate: Tile {
           required property var modelData
@@ -403,7 +406,7 @@ Item {
           width: folderGrid.width + 48
           height: folderTitle.height + folderGrid.height + 64
           radius: 24
-          color: root.alpha(root.bg, 0.88)
+          color: root.alpha(root.bg, 0.96)
           border.width: 0.5
           border.color: root.alpha(root.fg, 0.14)
 
