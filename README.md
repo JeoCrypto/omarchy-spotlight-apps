@@ -2,7 +2,7 @@
 
 A floating, frosted, macOS Spotlight-style app panel for [Omarchy](https://omarchy.org), built as an Omarchy shell plugin.
 
-![Spotlight Apps preview](preview.png)
+![Spotlight Apps demo: opening from the dock, browsing categories, searching and launching an app](demo.webp)
 
 - **A rounded glass card** with a soft shadow. Hyprland blurs only the area behind the card.
 - **Search** as soon as it opens. Results include apps (by name, generic name and keywords) and settings.
