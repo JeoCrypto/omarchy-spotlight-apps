@@ -27,9 +27,11 @@ Item {
   readonly property string pluginId: manifest && manifest.id ? manifest.id : "io.github.jeocrypto.launchpad"
 
   // ---- Geometry (logical px, whole numbers so edges land on pixels) ----
-  readonly property int iconSize: 64
-  readonly property int cellWidth: 128
-  readonly property int cellHeight: 124
+  // 56 px icons load at 112 device pixels on a 2x screen, below the 128 px
+  // most themes ship, so they're scaled down (sharp) rather than up (soft).
+  readonly property int iconSize: 56
+  readonly property int cellWidth: 116
+  readonly property int cellHeight: 112
   readonly property int maxColumns: 7
 
   // ---- Theme: every colour in the active Omarchy theme's colors.toml ----
@@ -477,7 +479,7 @@ Item {
     IconImage {
       visible: tile.item && tile.item.kind === "app"
       x: (parent.width - root.iconSize) / 2
-      y: 14
+      y: 12
       implicitSize: root.iconSize
       source: visible ? root.iconSource(tile.item.icon) : ""
       asynchronous: true
@@ -487,7 +489,7 @@ Item {
     GlyphTile {
       visible: tile.item && tile.item.kind === "setting"
       x: (parent.width - root.iconSize) / 2
-      y: 14
+      y: 12
       size: root.iconSize
       setting: visible ? tile.item : null
     }
@@ -496,7 +498,7 @@ Item {
     Rectangle {
       visible: tile.item && tile.item.kind === "folder"
       x: (parent.width - root.iconSize) / 2
-      y: 14
+      y: 12
       width: root.iconSize
       height: root.iconSize
       radius: 16
@@ -512,17 +514,17 @@ Item {
           model: tile.item && tile.item.kind === "folder" ? tile.item.items.slice(0, 4) : []
           Item {
             required property var modelData
-            width: 24; height: 24
+            width: 22; height: 22
             IconImage {
               visible: modelData.kind === "app"
               anchors.fill: parent
-              implicitSize: 24
+              implicitSize: 22
               source: visible ? root.iconSource(modelData.icon) : ""
               asynchronous: true
             }
             GlyphTile {
               visible: modelData.kind === "setting"
-              size: 24
+              size: 22
               setting: visible ? modelData : null
             }
           }
@@ -532,7 +534,7 @@ Item {
 
     Text {
       x: 8
-      y: 14 + root.iconSize + 8
+      y: 12 + root.iconSize + 8
       width: parent.width - 16
       text: tile.item ? tile.item.name : ""
       color: root.fg
