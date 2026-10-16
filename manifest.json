@@ -1,11 +1,13 @@
 {
   "schemaVersion": 1,
   "id": "io.github.jeocrypto.launchpad",
-  "name": "Launchpad",
-  "version": "1.0.0",
+  "name": "Spotlight Apps",
+  "version": "1.1.0",
   "author": "JeoCrypto",
   "description": "A floating, frosted, macOS Spotlight-style app panel with search, categories and an Omarchy Settings section.",
-  "kinds": ["panel"],
+  "kinds": [
+    "panel"
+  ],
   "entryPoints": {
     "panel": "Launchpad.qml"
   }

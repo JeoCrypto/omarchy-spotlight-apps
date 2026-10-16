@@ -1,8 +1,8 @@
-# Launchpad
+# Spotlight Apps
 
 A floating, frosted, macOS Spotlight-style app panel for [Omarchy](https://omarchy.org), built as an Omarchy shell plugin.
 
-![Launchpad preview](preview.png)
+![Spotlight Apps preview](preview.png)
 
 - **A rounded glass card** with a soft shadow. Hyprland blurs only the area behind the card.
 - **Search** as soon as it opens. Results include apps (by name, generic name and keywords) and settings.
@@ -12,6 +12,8 @@ A floating, frosted, macOS Spotlight-style app panel for [Omarchy](https://omarc
 - **Sharp on HiDPI:** 56 px icons load at device resolution, and the settings tiles use vector glyphs.
 - **Follows your Omarchy theme,** and hides the same apps as Omarchy's own Apps menu (`launcher.hides`).
 - **Loads only while open,** so it uses no memory the rest of the time.
+
+The plugin ID is `io.github.jeocrypto.launchpad` (its original name).
 
 ## Use
 
@@ -28,7 +30,7 @@ Click an app to open it. Click outside the panel, or the × button, to close it.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/JeoCrypto/omarchy-launchpad --enable
+omarchy plugin add https://github.com/JeoCrypto/omarchy-spotlight-apps --enable
 ```
 
 ### Keybinding
@@ -36,7 +38,7 @@ omarchy plugin add https://github.com/JeoCrypto/omarchy-launchpad --enable
 Add to `~/.config/hypr/bindings.lua` (`SUPER + A` is Ubuntu's "Show apps" shortcut and is free in Omarchy's defaults):
 
 ```lua
-o.bind("SUPER + A", "Launchpad", "omarchy-shell shell toggle io.github.jeocrypto.launchpad")
+o.bind("SUPER + A", "Spotlight Apps", "omarchy-shell shell toggle io.github.jeocrypto.launchpad")
 ```
 
 ### Frosted blur (recommended)
@@ -49,7 +51,7 @@ hl.layer_rule({ match = { namespace = "^launchpad$" }, blur = true, ignore_alpha
 
 ### Open it from Glass Dock (optional)
 
-To make Glass Dock's app-grid button open the Launchpad:
+To make Glass Dock's app-grid button open Spotlight Apps:
 
 ```bash
 mkdir -p ~/.config/glass-dock

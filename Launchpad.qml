@@ -1,4 +1,4 @@
-// Launchpad: a floating, frosted, macOS Spotlight-style app panel for Omarchy.
+// Spotlight Apps: a floating, frosted, macOS Spotlight-style app panel for Omarchy.
 //
 // An Omarchy shell "panel" plugin that loads only while open:
 //   omarchy-shell shell toggle io.github.jeocrypto.launchpad
