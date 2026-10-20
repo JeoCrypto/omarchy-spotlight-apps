@@ -1,0 +1,35 @@
+[
+  {
+    "id": "omarchy-remote",
+    "name": "Omarchy Remote",
+    "description": "Files, GitHub and a terminal for the Remote project",
+    "keywords": "remote development coding project work",
+    "directory": "~/Work/omarchy-remote",
+    "layout": "sixty",
+    "apps": [
+      {
+        "argv": [
+          "strata",
+          "~/Work/omarchy-remote"
+        ],
+        "match": "^(strata|io\\.github\\.lgse\\.Strata)$"
+      },
+      {
+        "argv": [
+          "chromium",
+          "--new-window",
+          "https://github.com/JeoCrypto/omarchy-remote"
+        ],
+        "match": "^chromium$"
+      },
+      {
+        "argv": [
+          "foot",
+          "--app-id=project.omarchy-remote.terminal",
+          "workspace-project-shell"
+        ],
+        "match": "^project\\.omarchy-remote\\.terminal$"
+      }
+    ]
+  }
+]

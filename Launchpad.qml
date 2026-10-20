@@ -89,9 +89,144 @@ Item {
     onLoadFailed: root.pinned = root.defaultPinned
   }
 
+  // ---- Workspace presets: validated by the bundled helper ----
+  property var workspaceItems: []
+  property string workspaceError: ""
+  Process {
+    id: presetList
+    command: [root.home + "/.local/bin/workspace-presets", "list"]
+    stdout: StdioCollector { id: presetOutput; waitForEnd: true }
+    onExited: function(exitCode) {
+      try {
+        if (exitCode !== 0) throw new Error("Preset helper failed")
+        const entries = JSON.parse(presetOutput.text)
+        root.workspaceItems = entries.map(p => ({
+          kind: "workspace", id: p.id, name: p.name,
+          description: p.description, glyph: 0xF0F54, tint: "accent",
+          search: ("workspace project " + p.name + " " + p.description + " " + p.keywords).toLowerCase()
+        }))
+        root.workspaceError = ""
+      } catch (e) {
+        root.workspaceItems = []
+        root.workspaceError = "Workspace presets are unavailable. Check your preset file."
+      }
+    }
+  }
+
+  property var liveWorkspaces: []
+  property string overviewError: ""
+  property var backupStatus: ({})
+  property string notice: ""
+  readonly property bool overviewMode: chip === "Overview" && !searching
+  readonly property bool backupMode: chip === "Backups" && !searching
+  readonly property string desktopHelper: home + "/.local/bin/workspace-desktop"
+
+  function refreshDesktop() {
+    if (!overviewProbe.running) overviewProbe.running = true
+    if (!backupProbe.running) backupProbe.running = true
+  }
+  Process {
+    id: overviewProbe
+    command: [root.desktopHelper, "overview"]
+    stdout: StdioCollector { id: overviewOutput; waitForEnd: true }
+    onExited: function(code) {
+      try {
+        const data = JSON.parse(overviewOutput.text)
+        if (code !== 0 || !Array.isArray(data)) throw new Error(data.error || "Workspaces unavailable")
+        root.liveWorkspaces = data
+        root.overviewError = ""
+      } catch (e) { root.liveWorkspaces = []; root.overviewError = "Could not read the current desktop. Try Refresh." }
+    }
+  }
+  Process {
+    id: backupProbe
+    command: [root.desktopHelper, "backup"]
+    stdout: StdioCollector { id: backupOutput; waitForEnd: true }
+    onExited: function(code) {
+      try { root.backupStatus = JSON.parse(backupOutput.text) }
+      catch (e) { root.backupStatus = {label: "Backup status unavailable", error: "Try Refresh."} }
+    }
+  }
+  Timer { interval: 5000; running: root.opened && (root.overviewMode || root.backupMode); repeat: true; onTriggered: root.refreshDesktop() }
+
+  function editPreset(id) {
+    if (formRead.running || editor.busy) return
+    formRead.command = [root.home + "/.local/bin/workspace-presets", "form"].concat(id ? [id] : [])
+    formRead.running = true
+  }
+  function editSelectedPreset() {
+    const item = gridItems[currentIndex]
+    if (item && item.kind === "workspace") editPreset(item.id)
+  }
+  Process {
+    id: formRead
+    stdout: StdioCollector { id: formOutput; waitForEnd: true }
+    stderr: StdioCollector { id: formError; waitForEnd: true }
+    onExited: function(code) {
+      try {
+        if (code !== 0) throw new Error(formError.text)
+        editor.show(JSON.parse(formOutput.text))
+      } catch (e) { root.notice = String(e.message || e) }
+    }
+  }
+  property string writePayload: ""
+  function writePreset(action, data) {
+    if (formWrite.running) return
+    editor.busy = true
+    editor.error = ""
+    writePayload = JSON.stringify(data)
+    formWrite.command = [root.home + "/.local/bin/workspace-presets", action]
+    formWrite.running = true
+  }
+  Process {
+    id: formWrite
+    stdinEnabled: true
+    onStarted: write(root.writePayload + "\n")
+    stdout: StdioCollector { id: saveOutput; waitForEnd: true }
+    stderr: StdioCollector { id: saveError; waitForEnd: true }
+    onExited: function(code) {
+      editor.busy = false
+      if (code !== 0) { editor.error = saveError.text.trim() || "Could not save the preset."; return }
+      editor.visible = false
+      root.notice = "Preset updated"
+      root.query = ""
+      root.chip = "Workspaces"
+      presetList.running = true
+      search.forceActiveFocus()
+    }
+  }
+  Process {
+    id: desktopAction
+    property bool focusing: false
+    stdout: StdioCollector { id: actionOutput; waitForEnd: true }
+    onExited: function(code) {
+      if (focusing && code === 0) { root.dismiss(); return }
+      try {
+        const reply = JSON.parse(actionOutput.text)
+        root.notice = reply.message || reply.error || ""
+      } catch (e) { root.notice = code === 0 ? "" : "Action failed. Try again." }
+      root.refreshDesktop()
+    }
+  }
+  function focusWorkspace(id) {
+    if (desktopAction.running) return
+    desktopAction.focusing = true
+    desktopAction.command = [desktopHelper, "focus", String(id)]
+    desktopAction.running = true
+  }
+  function startBackup() {
+    if (desktopAction.running) return
+    desktopAction.focusing = false
+    desktopAction.command = [desktopHelper, "backup-start"]
+    desktopAction.running = true
+  }
+
   // ---- Settings: Omarchy's own panels and menus ----
   // glyph: Nerd Font codepoint; tint: theme colour name.
   readonly property var settingsItems: [
+    { kind: "action", name: "Workspace overview", glyph: 0xF0328, tint: "cyan", page: "Overview" },
+    { kind: "action", name: "Backups", glyph: 0xF06F7, tint: "green", page: "Backups" },
+    { kind: "action", name: "Manage presets", glyph: 0xF0F54, tint: "accent", page: "Workspaces" },
     { kind: "setting", name: "Wi-Fi",       glyph: 0xF05A9, tint: "blue",    cmd: "omarchy-shell shell toggle omarchy.network" },
     { kind: "setting", name: "Bluetooth",   glyph: 0xF00AF, tint: "blue",    cmd: "omarchy-shell shell toggle omarchy.bluetooth" },
     { kind: "setting", name: "Sound",       glyph: 0xF057E, tint: "red",     cmd: "omarchy-shell shell toggle omarchy.audio" },
@@ -166,7 +301,7 @@ Item {
 
   // "All", then every category that has something in it.
   readonly property var chips: {
-    const out = ["All"]
+    const out = ["All", "Workspaces", "Overview", "Backups"]
     for (const r of categoryRules.concat([{ name: "Web Apps" }])) {
       if (r.name === "Settings" || apps.some(a => a.category === r.name)) out.push(r.name)
     }
@@ -183,7 +318,7 @@ Item {
   readonly property var results: {
     const q = query.trim().toLowerCase()
     if (!q) return []
-    const pool = apps.concat(settingsItems.map(s => Object.assign({ search: s.name.toLowerCase() }, s)))
+    const pool = apps.concat(workspaceItems, settingsItems.map(s => Object.assign({ search: s.name.toLowerCase() }, s)))
     const scored = []
     for (const item of pool) {
       const name = item.name.toLowerCase()
@@ -193,7 +328,7 @@ Item {
       else if ((item.generic || "").startsWith(q)) score = 0
       else if (name.split(/[\s\-_.]+/).some(w => w.startsWith(q))) score = 1
       else if (name.includes(q)) score = 2
-      else if (item.search.includes(q)) score = 3
+      else if (q.split(/\s+/).every(word => item.search.includes(word))) score = 3
       if (score >= 0) scored.push({ score: score, item: item })
     }
     scored.sort((a, b) => a.score - b.score || a.item.name.localeCompare(b.item.name))
@@ -207,6 +342,7 @@ Item {
   // the alphabetical list always starts on a fresh row under the divider.
   readonly property var gridItems: {
     if (searching) return results
+    if (chip === "Workspaces") return workspaceItems
     if (chip === "Settings") return settingsItems.concat(apps.filter(a => a.category === "Settings"))
     if (chip !== "All") return apps.filter(a => a.category === chip)
     if (!showSuggested) return apps
@@ -215,6 +351,7 @@ Item {
     return row.concat(apps)
   }
 
+  onGridItemsChanged: if (!selectable(currentIndex)) currentIndex = firstSelectable(0, 1)
   onQueryChanged: currentIndex = firstSelectable(0, 1)
   onChipChanged: currentIndex = firstSelectable(0, 1)
 
@@ -227,8 +364,18 @@ Item {
 
   function open(payloadJson) {
     themeColors.reload()
+    editor.visible = false
+    notice = ""
+    refreshDesktop()
+    workspaceItems = []
+    workspaceError = ""
+    presetList.running = true
     query = ""
     chip = "All"
+    try {
+      const payload = JSON.parse(payloadJson || "{}")
+      if (["Workspaces", "Overview", "Backups"].indexOf(payload.page) >= 0) chip = payload.page
+    } catch (e) { }
     currentIndex = firstSelectable(0, 1)
     opened = true
   }
@@ -245,12 +392,16 @@ Item {
 
   function activate(item) {
     if (!item || item.kind === "spacer") return
+    if (item.kind === "action") { query = ""; chip = item.page; refreshDesktop(); return }
     if (item.kind === "app") Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.id])
+    else if (item.kind === "workspace") Quickshell.execDetached([root.home + "/.local/bin/workspace-presets", "open", item.id])
     else if (item.kind === "setting") Quickshell.execDetached(["bash", "-lc", item.cmd])
     dismiss()
   }
 
   function move(dx, dy) {
+    if (overviewMode) { overview.move(dy || dx); return }
+    if (backupMode) return
     if (currentIndex < 0) { currentIndex = firstSelectable(0, 1); return }
     let next = currentIndex + dx + dy * columns
     next = Math.max(0, Math.min(gridItems.length - 1, next))
@@ -355,13 +506,15 @@ Item {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             visible: !search.text
-            text: "Search apps"
+            text: "Search apps, settings & workspaces"
             color: root.alpha(root.fg, 0.4)
             font: search.font
           }
 
           Keys.onPressed: (e) => {
-            if (e.key === Qt.Key_Escape) {
+            if ((e.modifiers & Qt.ControlModifier) && e.key === Qt.Key_N) { root.editPreset("") }
+            else if ((e.modifiers & Qt.ControlModifier) && e.key === Qt.Key_E && root.chip === "Workspaces") { root.editSelectedPreset() }
+            else if (e.key === Qt.Key_Escape) {
               if (root.query) root.query = ""
               else if (root.chip !== "All") root.chip = "All"
               else root.dismiss()
@@ -371,7 +524,10 @@ Item {
             else if (e.key === Qt.Key_Right) root.move(1, 0)
             else if (e.key === Qt.Key_Up) root.move(0, -1)
             else if (e.key === Qt.Key_Down) root.move(0, 1)
-            else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) root.activate(root.gridItems[root.currentIndex])
+            else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
+              if (root.overviewMode) overview.activateCurrent()
+              else root.activate(root.gridItems[root.currentIndex])
+            }
             else return
             e.accepted = true
           }
@@ -443,10 +599,11 @@ Item {
       // ---- App grid ----
       GridView {
         id: grid
+        visible: !root.overviewMode && !root.backupMode && !editor.visible
         x: root.padding
         y: chipStrip.y + chipStrip.height + 14
         width: root.columns * root.cellWidth
-        height: parent.height - y - 16
+        height: parent.height - y - 64
         cellWidth: root.cellWidth
         cellHeight: root.cellHeight
         clip: true
@@ -476,7 +633,7 @@ Item {
 
       // Thin scroll indicator
       Rectangle {
-        visible: grid.contentHeight > grid.height
+        visible: grid.visible && grid.contentHeight > grid.height
         x: parent.width - 10
         y: grid.y + grid.visibleArea.yPosition * grid.height
         width: 3
@@ -488,11 +645,51 @@ Item {
       Text {
         anchors.horizontalCenter: parent.horizontalCenter
         y: grid.y + 40
-        visible: root.searching && root.results.length === 0
-        text: "No results"
+        visible: grid.visible && ((root.searching && root.results.length === 0) || (!root.searching && root.chip === "Workspaces" && root.workspaceItems.length === 0))
+        text: root.chip === "Workspaces" && !root.searching
+          ? (root.workspaceError || "Create a preset to bring your project together.") : "No results"
         color: root.alpha(root.fg, 0.5)
         font.family: "sans-serif"
         font.pixelSize: 15
+      }
+
+      Row {
+        visible: !editor.visible && root.chip === "Workspaces" && !root.searching
+        x: root.padding; anchors.bottom: parent.bottom; anchors.bottomMargin: 16; spacing: 10
+        ActionButton { text: "New preset"; primary: true; accent: root.accent; onClicked: root.editPreset("") }
+        ActionButton {
+          text: "Edit selected"; foreground: root.fg
+          enabled: root.currentIndex >= 0 && root.workspaceItems.length > 0
+          onClicked: root.editSelectedPreset()
+        }
+        Text { text: root.notice || "Ctrl+N new · Ctrl+E edit"; textFormat: Text.PlainText; width: 410; elide: Text.ElideRight; color: root.fg; opacity: 0.6; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+      }
+      WorkspaceOverview {
+        id: overview
+        visible: root.overviewMode && !editor.visible
+        x: root.padding; y: grid.y; width: parent.width - root.padding * 2; height: parent.height - y - 20
+        foreground: root.fg; accent: root.accent
+        workspaces: root.liveWorkspaces; error: root.overviewError
+        onSelected: function(id) { root.focusWorkspace(id) }
+        onRefreshRequested: root.refreshDesktop()
+      }
+      BackupPanel {
+        visible: root.backupMode && !editor.visible
+        x: root.padding; y: grid.y; width: parent.width - root.padding * 2; height: parent.height - y - 20
+        foreground: root.fg; accent: root.accent; status: root.backupStatus
+        message: root.notice; busy: desktopAction.running || backupProbe.running
+        onRefreshRequested: root.refreshDesktop()
+        onStartRequested: root.startBackup()
+        onLogsRequested: Quickshell.execDetached([root.desktopHelper, "backup-logs"])
+      }
+      PresetEditor {
+        id: editor
+        anchors { fill: parent; margins: 10 }
+        z: 20
+        backgroundColor: Qt.darker(root.bg, 0.95); foreground: root.fg; accent: root.accent
+        onSaveRequested: function(data) { root.writePreset("save", data) }
+        onDeleteRequested: function(data) { root.writePreset("delete", data) }
+        onCancelled: { if (!busy) { visible = false; search.forceActiveFocus() } }
       }
     }
   }
@@ -529,7 +726,7 @@ Item {
     }
 
     GlyphTile {
-      visible: tile.item && tile.item.kind === "setting"
+      visible: tile.item && (tile.item.kind === "setting" || tile.item.kind === "workspace" || tile.item.kind === "action")
       x: (parent.width - root.iconSize) / 2
       y: 8
       size: root.iconSize

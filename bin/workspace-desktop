@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Local workspace overview and Restic job status. Does not read backup credentials."""
+import argparse
+import datetime as dt
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'omarchy/backup-status.json'
+
+
+def run(argv):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=8)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or 'Desktop service unavailable')
+    return result.stdout
+
+
+def read_state(path):
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError('Invalid backup state')
+    return data
+
+
+def process_identity(pid):
+    if not pid:
+        return None
+    try:
+        return Path('/proc/' + str(int(pid)) + '/stat').read_text().rsplit(')', 1)[1].split()[19]
+    except FileNotFoundError:
+        return ''
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def record(path, event, code=0):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix('.lock'), 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = read_state(path)
+        now = time.time()
+        if event == 'start':
+            data.update(last_attempt=now, status='running', stage='backup', pid=os.getppid(), pid_start=process_identity(os.getppid()))
+        elif event == 'snapshot':
+            data.update(last_success=now, stage='retention')
+        elif event == 'finish':
+            data.update(last_finished=now, status='success' if code == 0 else 'failed', exit_code=code)
+        fd, temporary = tempfile.mkstemp(prefix='.backup-status-', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'w') as out:
+                json.dump(data, out)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def properties(unit, keys):
+    output = run(['systemctl', '--user', 'show', unit, *['--property=' + k for k in keys]])
+    return dict(line.split('=', 1) for line in output.splitlines() if '=' in line)
+
+
+def timestamp(value):
+    return dt.datetime.fromtimestamp(value).astimezone().strftime('%d %b %Y, %H:%M') if value else 'Not recorded yet'
+
+
+def backup_status(path=STATE):
+    data = read_state(path)
+    error = ''
+    service, timer = {}, {}
+    try:
+        service = properties('restic-backup.service', ['LoadState', 'ActiveState', 'SubState', 'Result'])
+        timer = properties('restic-backup.timer', ['LoadState', 'ActiveState', 'NextElapseUSecRealtime'])
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        error = str(exc)
+    status = data.get('status', 'unknown')
+    if service.get('ActiveState') in ('active', 'activating'):
+        status = 'running'
+    elif service.get('Result') not in (None, '', 'success'):
+        status = 'failed'
+    elif status == 'running' and data.get('pid_start') and process_identity(data.get('pid')) not in (None, data['pid_start']):
+        status = 'interrupted'
+    elif status == 'running' and time.time() - data.get('last_attempt', 0) > 86400:
+        status = 'interrupted'
+    if status == 'success' and not data.get('last_success'):
+        status = 'unknown'
+    if status == 'success' and time.time() - data['last_success'] > 172800:
+        status = 'overdue'
+    labels = {'unknown': 'No confirmed backup yet', 'running': 'Backup running', 'success': 'Backup up to date',
+              'failed': 'Backup needs attention', 'interrupted': 'Backup may have been interrupted', 'overdue': 'Backup is over two days old'}
+    detail = 'The last snapshot was saved, but retention failed.' if status == 'failed' and data.get('stage') == 'retention' else ''
+    next_run = timer.get('NextElapseUSecRealtime', '')
+    if timer.get('ActiveState') != 'active':
+        next_run = 'Timer is not active' if not error else 'Unavailable'
+    return {'status': status, 'label': labels.get(status, labels['unknown']), 'detail': detail,
+            'lastSuccess': timestamp(data.get('last_success')), 'lastAttempt': timestamp(data.get('last_attempt')),
+            'nextRun': next_run or 'Not scheduled', 'serviceAvailable': service.get('LoadState') == 'loaded',
+            'error': 'Live service status is unavailable.' if error else ''}
+
+
+def workspace_overview():
+    workspaces = json.loads(run(['hyprctl', 'workspaces', '-j']))
+    clients = json.loads(run(['hyprctl', 'clients', '-j']))
+    active = json.loads(run(['hyprctl', 'activeworkspace', '-j']))
+    items = []
+    for ws in workspaces:
+        if str(ws.get('name', '')).startswith('special:'):
+            continue
+        windows = [c for c in clients if c.get('workspace', {}).get('id') == ws['id'] and c.get('mapped', True)]
+        remote = any(str(c.get('class', '')).startswith('omarchy-remote-') for c in windows)
+        name = ws.get('name', str(ws['id']))
+        kind = 'Remote' if remote else 'Project' if name.startswith('project-') else 'Local'
+        items.append({'id': ws['id'], 'name': name.removeprefix('project-') if kind == 'Project' else name,
+                      'kind': kind, 'active': ws['id'] == active.get('id'), 'monitor': ws.get('monitor', ''),
+                      'windows': [{'title': c.get('title', '') or c.get('class', 'Window'), 'class': c.get('class', '')} for c in windows]})
+    return sorted(items, key=lambda w: (not w['active'], w['id']))
+
+
+
+def focus_workspace(workspace_id):
+    # Negative named-workspace ids are not dispatcher selectors: "-9" means
+    # a relative workspace move. Resolve the current name before focusing.
+    workspaces = json.loads(run(['hyprctl', 'workspaces', '-j']))
+    target = next((w for w in workspaces if w['id'] == workspace_id), None)
+    if not target:
+        raise ValueError('That workspace has closed. Refresh the overview.')
+    selector = str(workspace_id) if workspace_id > 0 else 'name:' + target['name']
+    if any(ord(c) < 32 for c in selector):
+        raise ValueError('Unsupported workspace name')
+    reply = run(['hyprctl', 'dispatch', 'hl.dsp.focus({ workspace = ' + json.dumps(selector, ensure_ascii=False) + ' })'])
+    if reply.strip() != 'ok':
+        raise RuntimeError(reply.strip())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--state', type=Path, default=STATE)
+    sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('overview')
+    sub.add_parser('backup')
+    sub.add_parser('focus').add_argument('id', type=int)
+    rec = sub.add_parser('record')
+    rec.add_argument('event', choices=['start', 'snapshot', 'finish'])
+    rec.add_argument('code', type=int, nargs='?', default=0)
+    sub.add_parser('backup-start')
+    sub.add_parser('backup-logs')
+    args = parser.parse_args()
+    try:
+        if args.action == 'overview':
+            print(json.dumps(workspace_overview()))
+        elif args.action == 'backup':
+            print(json.dumps(backup_status(args.state)))
+        elif args.action == 'record':
+            record(args.state, args.event, args.code)
+        elif args.action == 'focus':
+            focus_workspace(args.id)
+        elif args.action == 'backup-start':
+            run(['systemctl', '--user', 'start', '--no-block', 'restic-backup.service'])
+            print(json.dumps({'message': 'Backup requested. The job runs when its power condition allows it.'}))
+        else:
+            subprocess.Popen(['foot', '-e', 'bash', '-c', 'journalctl --user -u restic-backup.service -n 100 --no-pager; printf "\\nPress Enter to close."; read -r'], start_new_session=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        print(json.dumps({'error': str(exc)}))
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

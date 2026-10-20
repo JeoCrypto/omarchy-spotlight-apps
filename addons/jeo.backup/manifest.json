@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "jeo.backup",
+  "name": "Backup status",
+  "version": "1.0.0",
+  "author": "JeoCrypto",
+  "description": "Restic snapshot status, next run and failure indicator. Opens Backups in Spotlight.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "BarWidget.qml"},
+  "barWidget": {"displayName": "Backup status", "category": "System", "allowMultiple": false}
+}

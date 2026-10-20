@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Open a normal interactive Bash, then offer the project's virtual environment.
+# This file doubles as Bash's startup file; no temporary files are needed.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  exec bash --rcfile "${BASH_SOURCE[0]}" -i
+fi
+
+[[ -f ~/.bashrc ]] && source ~/.bashrc
+
+_workspace_offer_venv() {
+  local candidate reply
+  for candidate in .venv venv; do
+    [[ -f "$candidate/bin/activate" ]] || continue
+    # Prefer .venv if both names exist. Already active environments need no prompt.
+    [[ ${VIRTUAL_ENV:-} == "$PWD/$candidate" ]] && return
+    printf '\nFound %s in this project. Activate it? [y/N] ' "$candidate"
+    if IFS= read -r reply && [[ $reply == [yY] || $reply == [yY][eE][sS] ]]; then
+      source "$candidate/bin/activate"
+    fi
+    printf '\n'
+    return
+  done
+}
+_workspace_offer_venv
+unset -f _workspace_offer_venv

@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Launch named Hyprland workspaces from Spotlight. Python standard library only."""
+import argparse
+import fcntl
+import hashlib
+import tempfile
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'omarchy/workspace-presets.json'
+LAYOUTS = {'halves', 'sixty', 'seventy', 'thirds', 'center', 'grid'}
+
+
+def load(path):
+    return validate_data(json.loads(path.read_text()))
+
+
+def validate_data(data):
+    if not isinstance(data, list):
+        raise ValueError('Presets must be a JSON array')
+    seen = set()
+    for p in data:
+        if not isinstance(p, dict) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', p.get('id', '')):
+            raise ValueError('Each preset needs an id using lowercase letters, numbers and hyphens')
+        if p['id'] in seen:
+            raise ValueError('Duplicate preset id: ' + p['id'])
+        seen.add(p['id'])
+        if not isinstance(p.get('name'), str) or not p['name'].strip():
+            raise ValueError('Each preset needs a name')
+        if p.get('layout', 'grid') not in LAYOUTS:
+            raise ValueError('Unknown layout for ' + p['id'])
+        apps = p.get('apps')
+        if not isinstance(apps, list) or not apps:
+            raise ValueError('Each preset needs a nonempty apps array')
+        for app in apps:
+            argv = app.get('argv') if isinstance(app, dict) else None
+            if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and a and not any(ord(c) < 32 for c in a) for a in argv):
+                raise ValueError('Each app needs a nonempty argv array of strings')
+            if not isinstance(app.get('match'), str) or not app['match']:
+                raise ValueError('Each app needs a window class match expression')
+            re.compile(app['match'])
+            cwd = app.get('cwd', p.get('directory', '~'))
+            if not isinstance(cwd, str) or any(ord(c) < 32 for c in cwd):
+                raise ValueError('App directory must be a string')
+    return data
+
+
+
+def revision(path):
+    return hashlib.sha256(path.read_bytes() if path.exists() else b'[]').hexdigest()
+
+
+def role(app):
+    command = Path(app['argv'][0]).name
+    if command in ('foot', 'alacritty', 'kitty', 'ghostty', 'xdg-terminal-exec'):
+        return 'terminal'
+    if command in ('strata', 'nautilus', 'thunar', 'dolphin'):
+        return 'files'
+    if command in ('chromium', 'google-chrome', 'firefox', 'brave', 'brave-browser'):
+        return 'browser'
+    return 'custom'
+
+
+def form(path, preset_id=None):
+    raw = path.read_bytes() if path.exists() else b'[]'
+    presets = validate_data(json.loads(raw))
+    preset = next((p for p in presets if p['id'] == preset_id), None)
+    if preset_id and not preset:
+        raise ValueError('This preset no longer exists')
+    p = preset or {}
+    apps = p.get('apps', [])
+    url = next((a for app in apps if role(app) == 'browser' for a in app['argv'][1:] if a.startswith(('https://', 'http://'))), '')
+    return {'originalId': preset_id or '', 'revision': hashlib.sha256(raw).hexdigest(), 'name': p.get('name', ''),
+            'directory': p.get('directory', str(Path.home() / 'Work')), 'layout': p.get('layout', 'sixty'),
+            'url': url, 'terminal': not preset or any(role(a) == 'terminal' for a in apps),
+            'files': not preset or any(role(a) == 'files' for a in apps),
+            'customApps': sum(role(a) == 'custom' for a in apps)}
+
+
+def generated_apps(data, preset_id, old=None):
+    directory = data['directory']
+    old_apps = (old or {}).get('apps', [])
+    apps = [a.copy() for a in old_apps if role(a) == 'custom']
+    for kind, enabled in [('files', data['files']), ('browser', bool(data['url'])), ('terminal', data['terminal'])]:
+        if not enabled:
+            continue
+        existing = next((a for a in old_apps if role(a) == kind), None)
+        if existing:
+            app = dict(existing)
+            app['argv'] = [directory if a == (old or {}).get('directory') else a for a in existing['argv']]
+            if kind == 'browser':
+                app['argv'] = [a for a in app['argv'] if not a.startswith(('http://', 'https://'))] + [data['url']]
+            apps.append(app)
+            continue
+        if kind == 'files':
+            command = 'strata' if shutil.which('strata') else 'nautilus'
+            match = r'^(strata|io\.github\.lgse\.Strata)$' if command == 'strata' else r'^org\.gnome\.Nautilus$'
+            apps.append({'argv': [command, directory], 'match': match})
+        elif kind == 'browser':
+            command = next((c for c in ('chromium', 'google-chrome', 'firefox') if shutil.which(c)), None)
+            if not command:
+                raise ValueError('No supported browser found (Chromium, Chrome or Firefox)')
+            apps.append({'argv': [command, '--new-window', data['url']], 'match': '^' + re.escape(command) + '$'})
+        else:
+            app_id = 'project.' + preset_id + '.terminal'
+            apps.append({'argv': ['foot', '--app-id=' + app_id, 'workspace-project-shell'], 'match': '^' + re.escape(app_id) + '$'})
+    return apps
+
+
+def write_presets(path, presets):
+    validate_data(presets)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        backup = path.with_name(path.name + '.bak.' + str(time.time_ns()))
+        shutil.copy2(path, backup)
+    fd, temporary = tempfile.mkstemp(prefix='.workspace-presets-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as out:
+            json.dump(presets, out, indent=2)
+            out.write('\n')
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def manage(path, action, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix('.lock'), 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if data.get('revision') != revision(path):
+            raise ValueError('Presets changed while this form was open. Close it and try again.')
+        presets = load(path) if path.exists() else []
+        original_id = data.get('originalId', '')
+        old = next((p for p in presets if p['id'] == original_id), None)
+        if original_id and not old:
+            raise ValueError('This preset no longer exists')
+        if action == 'delete':
+            if not old:
+                raise ValueError('Choose a preset to delete')
+            write_presets(path, [p for p in presets if p['id'] != original_id])
+            return {'message': 'Preset deleted. Its open windows were left running.'}
+        for key in ('name', 'directory', 'layout', 'url'):
+            if not isinstance(data.get(key), str) or any(ord(c) < 32 for c in data[key]):
+                raise ValueError('Invalid ' + key)
+        if not data['name'].strip():
+            raise ValueError('Give your preset a name')
+        if not all(isinstance(data.get(key), bool) for key in ('files', 'terminal')):
+            raise ValueError('Choose which apps to open')
+        if data['url'] and not data['url'].startswith(('https://', 'http://')):
+            raise ValueError('Website must start with https:// or http://')
+        preset_id = original_id or re.sub(r'[^a-z0-9]+', '-', data['name'].lower()).strip('-')[:50] or 'workspace'
+        if not original_id:
+            base, number = preset_id, 2
+            while any(p['id'] == preset_id for p in presets):
+                preset_id = base + '-' + str(number)
+                number += 1
+        updated = dict(old or {})
+        updated.update(id=preset_id, name=data['name'].strip(), directory=data['directory'], layout=data['layout'])
+        updated['apps'] = generated_apps(data, preset_id, old)
+        validate_data([updated])
+        plan(updated)
+        presets = [updated if p['id'] == original_id else p for p in presets] if old else presets + [updated]
+        write_presets(path, presets)
+        return {'message': 'Preset saved', 'id': preset_id}
+
+
+def hypr(*args, as_json=False):
+    result = subprocess.run(['hyprctl', *args], capture_output=True, text=True, timeout=8)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or 'Hyprland is unavailable')
+    if as_json:
+        return json.loads(result.stdout)
+    if result.stdout.strip() != 'ok':
+        raise RuntimeError(result.stdout.strip() or 'Hyprland did not accept the command')
+
+
+def dispatch(expression):
+    hypr('dispatch', expression)
+
+
+def lua(value):
+    # JSON string quoting is also valid Lua for these strings (no control chars).
+    return json.dumps(value, ensure_ascii=False)
+
+
+def expanded(value):
+    return os.path.expandvars(os.path.expanduser(value))
+
+
+def plan(preset):
+    result = []
+    for app in preset['apps']:
+        argv = [expanded(a) for a in app['argv']]
+        cwd = Path(expanded(app.get('cwd', preset.get('directory', '~')))).resolve()
+        if not cwd.is_dir():
+            raise ValueError('Directory does not exist: ' + str(cwd))
+        if not shutil.which(argv[0]):
+            raise ValueError('Command not found: ' + argv[0])
+        result.append((argv, cwd, app['match']))
+    if not shutil.which('snap-layout'):
+        raise ValueError('Install Snap Layouts first (snap-layout is missing)')
+    return result
+
+
+def launch(preset):
+    workspace = 'project-' + preset['id']
+    clients = hypr('clients', '-j', as_json=True)
+    # A populated preset workspace is resumed, never reset or rearranged.
+    if any(c.get('workspace', {}).get('name') == workspace for c in clients):
+        dispatch('hl.dsp.focus({ workspace = ' + lua('name:' + workspace) + ' })')
+        return 'Resumed ' + preset['name']
+    apps = plan(preset)  # Check every executable and directory before changing anything.
+    dispatch('hl.dsp.focus({ workspace = ' + lua('name:' + workspace) + ' })')
+    for argv, cwd, match in apps:
+        before = {c['address'] for c in hypr('clients', '-j', as_json=True)}
+        command = shlex.join(['env', '--chdir=' + str(cwd), *argv])
+        dispatch('hl.dsp.exec_cmd(' + lua(command) + ', { workspace = ' + lua('name:' + workspace + ' silent') + ' })')
+        deadline = time.monotonic() + 12
+        found = None
+        while time.monotonic() < deadline:
+            for c in hypr('clients', '-j', as_json=True):
+                if c['address'] not in before and c.get('mapped', True) and re.search(match, c.get('class', '')):
+                    found = c
+                    break
+            if found:
+                break
+            time.sleep(0.2)
+        if not found:
+            raise RuntimeError('No new window appeared for ' + argv[0] + '. Check the command and match in your preset; other apps were left open.')
+        dispatch('hl.dsp.window.move({ workspace = ' + lua('name:' + workspace) + ', window = ' + lua('address:' + found['address']) + ', follow = false })')
+    # Do not change the layout of another workspace if the user moved away.
+    active = hypr('activeworkspace', '-j', as_json=True)
+    if active.get('name') == workspace:
+        dispatch('hl.dsp.focus({ window = ' + lua('address:' + found['address']) + ' })')
+        subprocess.run(['snap-layout', preset.get('layout', 'grid')], check=True, timeout=10)
+    return 'Opened ' + preset['name']
+
+
+def notify(message, error=False):
+    print(message, file=sys.stderr if error else sys.stdout)
+    if shutil.which('notify-send'):
+        subprocess.run(['notify-send', '-a', 'Workspace Presets', '-u', 'normal', 'Workspace Presets', message], capture_output=True, timeout=5)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, default=CONFIG)
+    sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('form', help='Read a preset for the editor').add_argument('id', nargs='?')
+    sub.add_parser('save', help='Save editor JSON from stdin')
+    sub.add_parser('delete', help='Delete a preset using editor JSON from stdin')
+    sub.add_parser('list', help='Print validated presets as JSON (no desktop access)')
+    sub.add_parser('validate', help='Check preset commands and directories without launching')
+    sub.add_parser('open', help='Open or resume a preset').add_argument('id')
+    args = parser.parse_args()
+    try:
+        if args.action == 'form':
+            print(json.dumps(form(args.config, args.id)))
+            return 0
+        if args.action in ('save', 'delete'):
+            print(json.dumps(manage(args.config, args.action, json.loads(sys.stdin.readline()))))
+            return 0
+        presets = load(args.config)
+        if args.action == 'list':
+            print(json.dumps([{'id': p['id'], 'name': p['name'], 'description': str(p.get('description', '')), 'keywords': str(p.get('keywords', ''))} for p in presets]))
+        elif args.action == 'validate':
+            for preset in presets:
+                plan(preset)
+            print(f'{len(presets)} presets valid')
+        else:
+            preset = next((p for p in presets if p['id'] == args.id), None)
+            if not preset:
+                raise ValueError('Unknown preset: ' + args.id)
+            runtime = os.environ.get('XDG_RUNTIME_DIR')
+            if not runtime:
+                raise RuntimeError('Run this inside your desktop session')
+            with open(Path(runtime) / 'omarchy-workspace-presets.lock', 'w') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise RuntimeError('Another workspace preset is still opening')
+                notify(launch(preset))
+        return 0
+    except (OSError, ValueError, TypeError, re.error, subprocess.SubprocessError, RuntimeError) as exc:
+        if args.action == 'open':
+            notify(str(exc), error=True)
+        else:
+            print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
