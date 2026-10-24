@@ -259,7 +259,44 @@ Item {
   function iconSource(icon) {
     const value = String(icon || "")
     if (value.startsWith("/")) return "file://" + value
-    return Quickshell.iconPath(value, "application-x-executable")
+    const themed = Quickshell.iconPath(value, true)
+    if (themed.length > 0) return themed
+    // Qt's themed lookup only knows icons that existed when the shell started,
+    // so fall back to our own index, which is rescanned every time the panel
+    // opens. Checking it second keeps already-resolved icons from reloading.
+    const found = root.iconIndex[value]
+    if (found) return "file://" + found
+    return Quickshell.iconPath("application-x-executable", true)
+  }
+
+  // Name -> path for app/device icons across the XDG icon dirs, mirroring
+  // Omarchy's AppLibrary scan. SVGs are listed first so they win over PNGs.
+  property var iconIndex: ({})
+  property var pendingIconIndex: ({})
+  Process {
+    id: iconIndexScan
+    command: ["bash", "-c", [
+      'dirs="$HOME/.icons $HOME/.local/share/icons";',
+      'IFS=":"; for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do dirs="$dirs $d/icons"; done; unset IFS;',
+      'for ext in svg png; do',
+      '  for base in $dirs; do',
+      '    [[ -d $base ]] && find "$base" \\( -path "*/apps/*" -o -path "*/devices/*" \\) -name "*.$ext" 2>/dev/null;',
+      '  done;',
+      '  find /usr/share/pixmaps -maxdepth 1 -name "*.$ext" 2>/dev/null;',
+      'done'
+    ].join(" ")]
+    stdout: SplitParser {
+      onRead: line => {
+        const path = String(line || "").trim()
+        const file = path.slice(path.lastIndexOf("/") + 1)
+        const dot = file.lastIndexOf(".")
+        const name = dot > 0 ? file.slice(0, dot) : file
+        if (name && root.pendingIconIndex[name] === undefined) root.pendingIconIndex[name] = path
+      }
+    }
+    onStarted: root.pendingIconIndex = ({})
+    // Swapping the property re-evaluates every iconSource() binding.
+    onExited: root.iconIndex = root.pendingIconIndex
   }
 
   function categoryOf(e) {
@@ -378,6 +415,7 @@ Item {
     } catch (e) { }
     currentIndex = firstSelectable(0, 1)
     opened = true
+    if (!iconIndexScan.running) iconIndexScan.running = true
   }
 
   function close() {
