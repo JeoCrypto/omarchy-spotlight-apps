@@ -431,7 +431,9 @@ Item {
   function activate(item) {
     if (!item || item.kind === "spacer") return
     if (item.kind === "action") { query = ""; chip = item.page; refreshDesktop(); return }
-    if (item.kind === "app") Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.id])
+    // Keep the .desktop suffix: gtk-launch strips a trailing ".desktop" from
+    // the id, so ids like org.telegram.desktop won't resolve without it.
+    if (item.kind === "app") Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.id + ".desktop"])
     else if (item.kind === "workspace") Quickshell.execDetached([root.home + "/.local/bin/workspace-presets", "open", item.id])
     else if (item.kind === "setting") Quickshell.execDetached(["bash", "-lc", item.cmd])
     dismiss()
