@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="demo.webp" alt="Spotlight Apps demo: opening from the dock, browsing categories, searching and launching an app" width="100%">
+  <img src="demo.webp" alt="Spotlight Apps demo: opening from the dock, keeping an app in the dock, browsing categories, searching and launching an app" width="100%">
 </p>
 
 <p align="center">
@@ -91,7 +91,7 @@ The demo above shows app search and settings; the workspace tools below are incl
   </tr>
 </table>
 
-Your pinned apps sit in a suggested row above every app in alphabetical order. The row is shared with [Glass Dock](https://github.com/JeoCrypto/omarchy-glass-dock). **Right-click any app** to keep it in the dock, or to remove it; an orange dot marks the apps that are already there. Hidden apps match Omarchy's own Apps menu (`launcher.hides`).
+Your pinned apps sit in a suggested row above every app in alphabetical order. The row is shared with [Glass Dock](https://github.com/JeoCrypto/omarchy-glass-dock). **Right-click any app**, or press `Ctrl+D` on the selected one, to keep it in the dock or to remove it; an orange dot marks the apps that are already there. Hidden apps match Omarchy's own Apps menu (`launcher.hides`).
 
 ## Workspace presets
 
@@ -158,10 +158,11 @@ Record a nonzero finish code from your failure/exit handler if the job fails. A 
 | `Enter` | Open the selection or switch to the selected workspace |
 | `Tab` / `Shift+Tab` | Next / previous category |
 | `Esc` | Clear the search, then return to All, then close |
+| `Ctrl+D` | Keep the selected app in the dock, or remove it |
 | `Ctrl+N` | Create a workspace preset |
 | `Ctrl+E` | Edit the selected preset in Workspaces |
 
-Click an app to open it. Click outside the panel, or the × button, to close it.
+Click an app to open it. Click outside the panel, or the × button, to close it. Pasting into the search field or the preset editor inserts the first line of the clipboard as plain text.
 
 ## Configure
 
@@ -169,7 +170,7 @@ Click an app to open it. Click outside the panel, or the × button, to close it.
 |---|---|
 | `~/.config/omarchy/workspace-presets.json` | Saved presets. Edit through Spotlight or customize app commands in this file. |
 | `~/.local/state/omarchy/backup-status.json` | Snapshot and job status written by the backup tracker. |
-| `~/.config/glass-dock/pinned` | The suggested row: one desktop-file id per line (shared with Glass Dock). Without it, Files, Chromium and Foot are suggested. Right-clicking an app edits this file for you. |
+| `~/.config/glass-dock/pinned` | The suggested row: one desktop-file id per line (shared with Glass Dock). Without it, Files, Chromium and Foot are suggested. Right-clicking an app edits this file for you; the dot appears once the file is saved. |
 
 The Settings tiles, the categories and the sizes are defined at the top of `Launchpad.qml`.
 
@@ -216,7 +217,7 @@ python3 -m unittest discover -s tests -v
 bash -n install-presets.sh install-desktop.sh bin/workspace-project-shell
 ```
 
-Tests cover preset creation/editing/deletion, stale edits, workspace selection, virtual-environment prompts and backup state. They do not launch real desktop apps or run a real backup.
+Tests cover preset creation/editing/deletion, stale edits, oversized or locked configuration files, workspace selection, virtual-environment prompts and backup state. They do not launch real desktop apps or run a real backup.
 
 ---
 

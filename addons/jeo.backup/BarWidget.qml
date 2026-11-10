@@ -12,16 +12,25 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function refresh() { if (!probe.running) probe.running = true }
+  // The status helper runs under `timeout` with capped output, and a second
+  // deadline here stops the run if the wrapper itself stalls.
+  function refresh() {
+    if (probe.running) return
+    probe.running = true
+    deadline.restart()
+  }
   Process {
     id: probe
-    command: [Quickshell.env("HOME") + "/.local/bin/workspace-desktop", "backup"]
+    command: ["bash", "-c", 'set -o pipefail; timeout -k 1 20 "$1" backup 2>/dev/null | head -c 65536',
+      "bash", Quickshell.env("HOME") + "/.local/bin/workspace-desktop"]
     stdout: StdioCollector { id: output; waitForEnd: true }
     onExited: function(code) {
+      deadline.stop()
       try { root.status = JSON.parse(output.text) }
       catch (e) { root.status = {status: "unknown", label: "Backup status unavailable"} }
     }
   }
+  Timer { id: deadline; interval: 23000; onTriggered: if (probe.running) probe.signal(9) }
   Timer { interval: 60000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
   WidgetButton {
     id: button

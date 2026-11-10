@@ -82,5 +82,29 @@ class PresetTests(unittest.TestCase):
             self.assertFalse(any('window.move' in c.args[0] for c in dispatch.call_args_list))
 
 
+class BoundsTests(unittest.TestCase):
+    def test_oversized_config_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'presets.json'
+            path.write_bytes(b' ' * (m.MAX_FILE_BYTES + 1))
+            with self.assertRaises(ValueError):
+                m.load(path)
+
+    def test_busy_lock_gives_up_instead_of_waiting_forever(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'presets.lock'
+            with open(path, 'a') as holder, open(path, 'a') as waiter:
+                fcntl.flock(holder, fcntl.LOCK_EX)
+                with self.assertRaises(RuntimeError):
+                    m.lock_exclusive(waiter, seconds=0.2)
+
+    def test_oversized_request_is_rejected(self):
+        import io
+        with patch.object(m.sys, 'stdin', io.StringIO('x' * 70000)):
+            with self.assertRaises(ValueError):
+                m.read_request()
+
+
 if __name__ == '__main__':
     unittest.main()

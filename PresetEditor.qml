@@ -118,6 +118,9 @@ Rectangle {
       placeholderTextColor: Qt.rgba(editor.foreground.r, editor.foreground.g, editor.foreground.b, 0.35)
       selectionColor: editor.accent
       font.pixelSize: 14
+      maximumLength: 512
+      PasteGuard { id: fieldPaste; field: input; maxChars: 512 }
+      Keys.onPressed: (e) => { if (fieldPaste.handleKey(e)) e.accepted = true }
       background: Rectangle {
         radius: 8; color: Qt.rgba(1, 1, 1, 0.055)
         border.width: 1; border.color: input.activeFocus ? editor.accent : Qt.rgba(1, 1, 1, 0.1)

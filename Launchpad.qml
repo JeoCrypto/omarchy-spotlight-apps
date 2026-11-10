@@ -95,14 +95,15 @@ Item {
   // ---- Workspace presets: validated by the bundled helper ----
   property var workspaceItems: []
   property string workspaceError: ""
-  Process {
+  // Every helper below runs through BoundedRun: a time limit, capped output
+  // and no leftover processes.
+  BoundedRun {
     id: presetList
-    command: [root.home + "/.local/bin/workspace-presets", "list"]
-    stdout: StdioCollector { id: presetOutput; waitForEnd: true }
-    onExited: function(exitCode) {
+    argv: [root.home + "/.local/bin/workspace-presets", "list"]
+    onFinished: function(exitCode, output, errors) {
       try {
         if (exitCode !== 0) throw new Error("Preset helper failed")
-        const entries = JSON.parse(presetOutput.text)
+        const entries = JSON.parse(output)
         root.workspaceItems = entries.map(p => ({
           kind: "workspace", id: p.id, name: p.name,
           description: p.description, glyph: 0xF0F54, tint: "accent",
@@ -125,28 +126,27 @@ Item {
   readonly property string desktopHelper: home + "/.local/bin/workspace-desktop"
 
   function refreshDesktop() {
-    if (!overviewProbe.running) overviewProbe.running = true
-    if (!backupProbe.running) backupProbe.running = true
+    overviewProbe.start()
+    backupProbe.start()
   }
-  Process {
+  BoundedRun {
     id: overviewProbe
-    command: [root.desktopHelper, "overview"]
-    stdout: StdioCollector { id: overviewOutput; waitForEnd: true }
-    onExited: function(code) {
+    argv: [root.desktopHelper, "overview"]
+    onFinished: function(code, output, errors) {
       try {
-        const data = JSON.parse(overviewOutput.text)
+        const data = JSON.parse(output)
         if (code !== 0 || !Array.isArray(data)) throw new Error(data.error || "Workspaces unavailable")
         root.liveWorkspaces = data
         root.overviewError = ""
       } catch (e) { root.liveWorkspaces = []; root.overviewError = "Could not read the current desktop. Try Refresh." }
     }
   }
-  Process {
+  BoundedRun {
     id: backupProbe
-    command: [root.desktopHelper, "backup"]
-    stdout: StdioCollector { id: backupOutput; waitForEnd: true }
-    onExited: function(code) {
-      try { root.backupStatus = JSON.parse(backupOutput.text) }
+    argv: [root.desktopHelper, "backup"]
+    seconds: 20
+    onFinished: function(code, output, errors) {
+      try { root.backupStatus = JSON.parse(output) }
       catch (e) { root.backupStatus = {label: "Backup status unavailable", error: "Try Refresh."} }
     }
   }
@@ -154,58 +154,49 @@ Item {
 
   function editPreset(id) {
     if (formRead.running || editor.busy) return
-    formRead.command = [root.home + "/.local/bin/workspace-presets", "form"].concat(id ? [id] : [])
-    formRead.running = true
+    formRead.start([root.home + "/.local/bin/workspace-presets", "form"].concat(id ? [id] : []))
   }
   function editSelectedPreset() {
     const item = gridItems[currentIndex]
     if (item && item.kind === "workspace") editPreset(item.id)
   }
-  Process {
+  BoundedRun {
     id: formRead
-    stdout: StdioCollector { id: formOutput; waitForEnd: true }
-    stderr: StdioCollector { id: formError; waitForEnd: true }
-    onExited: function(code) {
+    onFinished: function(code, output, errors) {
       try {
-        if (code !== 0) throw new Error(formError.text)
-        editor.show(JSON.parse(formOutput.text))
+        if (code !== 0) throw new Error(errors.trim() || "Could not read the preset.")
+        editor.show(JSON.parse(output))
       } catch (e) { root.notice = String(e.message || e) }
     }
   }
-  property string writePayload: ""
   function writePreset(action, data) {
     if (formWrite.running) return
     editor.busy = true
     editor.error = ""
-    writePayload = JSON.stringify(data)
-    formWrite.command = [root.home + "/.local/bin/workspace-presets", action]
-    formWrite.running = true
+    formWrite.input = JSON.stringify(data) + "\n"
+    formWrite.start([root.home + "/.local/bin/workspace-presets", action])
   }
-  Process {
+  BoundedRun {
     id: formWrite
-    stdinEnabled: true
-    onStarted: write(root.writePayload + "\n")
-    stdout: StdioCollector { id: saveOutput; waitForEnd: true }
-    stderr: StdioCollector { id: saveError; waitForEnd: true }
-    onExited: function(code) {
+    seconds: 15
+    onFinished: function(code, output, errors) {
       editor.busy = false
-      if (code !== 0) { editor.error = saveError.text.trim() || "Could not save the preset."; return }
+      if (code !== 0) { editor.error = errors.trim() || "Could not save the preset."; return }
       editor.visible = false
       root.notice = "Preset updated"
       root.query = ""
       root.chip = "Workspaces"
-      presetList.running = true
+      presetList.start()
       search.forceActiveFocus()
     }
   }
-  Process {
+  BoundedRun {
     id: desktopAction
     property bool focusing: false
-    stdout: StdioCollector { id: actionOutput; waitForEnd: true }
-    onExited: function(code) {
+    onFinished: function(code, output, errors) {
       if (focusing && code === 0) { root.dismiss(); return }
       try {
-        const reply = JSON.parse(actionOutput.text)
+        const reply = JSON.parse(output)
         root.notice = reply.message || reply.error || ""
       } catch (e) { root.notice = code === 0 ? "" : "Action failed. Try again." }
       root.refreshDesktop()
@@ -214,14 +205,12 @@ Item {
   function focusWorkspace(id) {
     if (desktopAction.running) return
     desktopAction.focusing = true
-    desktopAction.command = [desktopHelper, "focus", String(id)]
-    desktopAction.running = true
+    desktopAction.start([desktopHelper, "focus", String(id)])
   }
   function startBackup() {
     if (desktopAction.running) return
     desktopAction.focusing = false
-    desktopAction.command = [desktopHelper, "backup-start"]
-    desktopAction.running = true
+    desktopAction.start([desktopHelper, "backup-start"])
   }
 
   // ---- Settings: Omarchy's own panels and menus ----
@@ -372,7 +361,7 @@ Item {
     refreshDesktop()
     workspaceItems = []
     workspaceError = ""
-    presetList.running = true
+    presetList.start()
     query = ""
     chip = "All"
     try {
@@ -405,11 +394,11 @@ Item {
     return ""
   }
 
-  // The folder has to exist before the first save.
-  Component.onCompleted: Quickshell.execDetached(["mkdir", "-p", root.home + "/.config/glass-dock"])
-
+  // The save is one time-limited run: it creates the folder, writes a
+  // temporary file and renames it into place. The list shown here changes,
+  // and the tile reports the result, only after that run succeeded.
   function togglePinned(item) {
-    if (!item || item.kind !== "app") return
+    if (!item || item.kind !== "app" || pinnedSave.running) return
     const line = pinnedLine(item)
     // Keep comments and blank lines; without a file, start from the defaults.
     let lines
@@ -418,14 +407,46 @@ Item {
       lines = root.defaultPinned.slice()
     while (lines.length && lines[lines.length - 1].trim() === "") lines.pop()
     lines = line ? lines.filter(l => l.trim() !== line) : lines.concat([item.id])
-    pinnedFile.setText(lines.join("\n") + "\n")
-    root.pinned = lines.map(l => l.trim()).filter(l => l && !l.startsWith("#"))
+    const content = lines.join("\n") + "\n"
+    if (content.length > 16384) { root.flash(item.id, "Too many pinned apps"); return }
+    pinnedSave.pendingPinned = lines.map(l => l.trim()).filter(l => l && !l.startsWith("#"))
+    pinnedSave.flashId = item.id
+    pinnedSave.doneMessage = line ? "Removed from Dock" : "Kept in Dock"
+    pinnedSave.start(["sh", "-c",
+      'dir=$1; tmp=; trap \'[ -n "$tmp" ] && rm -f -- "$tmp"\' EXIT; ' +
+      'mkdir -p -- "$dir" && tmp=$(mktemp "$dir/.pinned.XXXXXX") && printf %s "$2" > "$tmp" && mv -f -- "$tmp" "$dir/pinned" && tmp=',
+      "sh", root.home + "/.config/glass-dock", content])
   }
+  BoundedRun {
+    id: pinnedSave
+    property var pendingPinned: []
+    property string flashId: ""
+    property string doneMessage: ""
+    seconds: 3
+    maxBytes: 1024
+    onFinished: function(code, output, errors) {
+      if (code === 0) { root.pinned = pendingPinned; root.flash(flashId, doneMessage) }
+      else root.flash(flashId, "Could not save")
+    }
+  }
+
+  // A short message shown on one tile (by app id).
+  property string flashId: ""
+  property string flashMessage: ""
+  function flash(id, message) {
+    if (!id || !message) return
+    flashId = id
+    flashMessage = message
+    flashClear.restart()
+  }
+  Timer { id: flashClear; interval: 1400; onTriggered: { root.flashId = ""; root.flashMessage = "" } }
 
   function activate(item) {
     if (!item || item.kind === "spacer") return
     if (item.kind === "action") { query = ""; chip = item.page; refreshDesktop(); return }
-    if (item.kind === "app") Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.id])
+    // gtk-launch drops one trailing ".desktop" from its argument, so an id that
+    // itself ends in ".desktop" (org.telegram.desktop) needs the suffix added.
+    if (item.kind === "app") Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.id + ".desktop"])
     else if (item.kind === "workspace") Quickshell.execDetached([root.home + "/.local/bin/workspace-presets", "open", item.id])
     else if (item.kind === "setting") Quickshell.execDetached(["bash", "-lc", item.cmd])
     dismiss()
@@ -532,8 +553,16 @@ Item {
           font.family: "sans-serif"
           font.pixelSize: 22
           clip: true
+          maximumLength: 256
           text: root.query
           onTextEdited: root.query = text
+
+          PasteGuard {
+            id: searchPaste
+            field: search
+            maxChars: 256
+            onInserted: root.query = search.text
+          }
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
@@ -544,8 +573,10 @@ Item {
           }
 
           Keys.onPressed: (e) => {
+            if (searchPaste.handleKey(e)) { e.accepted = true; return }
             if ((e.modifiers & Qt.ControlModifier) && e.key === Qt.Key_N) { root.editPreset("") }
             else if ((e.modifiers & Qt.ControlModifier) && e.key === Qt.Key_E && root.chip === "Workspaces") { root.editSelectedPreset() }
+            else if ((e.modifiers & Qt.ControlModifier) && e.key === Qt.Key_D) { root.togglePinned(root.gridItems[root.currentIndex]) }
             else if (e.key === Qt.Key_Escape) {
               if (root.query) root.query = ""
               else if (root.chip !== "All") root.chip = "All"
@@ -661,10 +692,7 @@ Item {
           onHovered: if (root.selectable(index)) root.currentIndex = index
           onActivated: root.activate(modelData)
           inDock: root.pinnedLine(modelData) !== ""
-          onSecondary: {
-            flash(inDock ? "Removed from Dock" : "Kept in Dock")
-            root.togglePinned(modelData)
-          }
+          onSecondary: root.togglePinned(modelData)
         }
       }
 
@@ -741,9 +769,7 @@ Item {
     // Right-click on an app: keep it in the dock or remove it.
     signal secondary()
     property bool inDock: false
-    property string flashText: ""
-    function flash(message) { flashText = message; flashTimer.restart() }
-    Timer { id: flashTimer; interval: 1400; onTriggered: tile.flashText = "" }
+    readonly property string flashText: item && item.kind === "app" && root.flashId !== "" && root.flashId === item.id ? root.flashMessage : ""
 
     readonly property bool isSpacer: !item || item.kind === "spacer"
     width: root.cellWidth

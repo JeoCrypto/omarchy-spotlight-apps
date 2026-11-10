@@ -20,7 +20,7 @@ plugin = config / 'plugins/io.github.jeocrypto.launchpad'
 if plugin.exists():
     shutil.copytree(plugin, backup / 'spotlight', ignore=shutil.ignore_patterns('.git', '*.webp', '*.jpg', '*.png'))
 plugin.mkdir(parents=True, exist_ok=True)
-for name in ['Launchpad.qml', 'ActionButton.qml', 'PresetEditor.qml', 'WorkspaceOverview.qml', 'BackupPanel.qml', 'manifest.json']:
+for name in ['Launchpad.qml', 'ActionButton.qml', 'BoundedRun.qml', 'PasteGuard.qml', 'PresetEditor.qml', 'WorkspaceOverview.qml', 'BackupPanel.qml', 'manifest.json']:
     target = plugin / name
     if (source / name).resolve() != target.resolve():
         shutil.copy2(source / name, target)

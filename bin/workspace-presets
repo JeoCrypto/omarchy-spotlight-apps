@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -17,9 +18,35 @@ import time
 CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'omarchy/workspace-presets.json'
 LAYOUTS = {'halves', 'sixty', 'seventy', 'thirds', 'center', 'grid'}
 
+# Limits that keep every run finite: files are read up to a fixed size, a busy
+# lock is retried for a few seconds and then reported, and an alarm ends the
+# whole run if it somehow outlives its budget.
+MAX_FILE_BYTES = 1_048_576
+LOCK_WAIT_SECONDS = 5
+
+
+def read_bounded(path, limit=MAX_FILE_BYTES):
+    with open(path, 'rb') as source:
+        data = source.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(Path(path).name + ' is too large to read')
+    return data
+
+
+def lock_exclusive(lock, seconds=LOCK_WAIT_SECONDS):
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Another change is still in progress. Try again.')
+            time.sleep(0.05)
+
 
 def load(path):
-    return validate_data(json.loads(path.read_text()))
+    return validate_data(json.loads(read_bounded(path)))
 
 
 def validate_data(data):
@@ -54,7 +81,7 @@ def validate_data(data):
 
 
 def revision(path):
-    return hashlib.sha256(path.read_bytes() if path.exists() else b'[]').hexdigest()
+    return hashlib.sha256(read_bounded(path) if path.exists() else b'[]').hexdigest()
 
 
 def role(app):
@@ -69,7 +96,7 @@ def role(app):
 
 
 def form(path, preset_id=None):
-    raw = path.read_bytes() if path.exists() else b'[]'
+    raw = read_bounded(path) if path.exists() else b'[]'
     presets = validate_data(json.loads(raw))
     preset = next((p for p in presets if p['id'] == preset_id), None)
     if preset_id and not preset:
@@ -136,7 +163,7 @@ def write_presets(path, presets):
 def manage(path, action, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path.with_suffix('.lock'), 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        lock_exclusive(lock)
         if data.get('revision') != revision(path):
             raise ValueError('Presets changed while this form was open. Close it and try again.')
         presets = load(path) if path.exists() else []
@@ -252,6 +279,14 @@ def notify(message, error=False):
         subprocess.run(['notify-send', '-a', 'Workspace Presets', '-u', 'normal', 'Workspace Presets', message], capture_output=True, timeout=5)
 
 
+def read_request(limit=65536):
+    """One line of editor JSON from standard input, up to a fixed size."""
+    line = sys.stdin.readline(limit + 1)
+    if len(line) > limit:
+        raise ValueError('The preset is too large')
+    return line
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=CONFIG)
@@ -263,12 +298,14 @@ def main():
     sub.add_parser('validate', help='Check preset commands and directories without launching')
     sub.add_parser('open', help='Open or resume a preset').add_argument('id')
     args = parser.parse_args()
+    # Opening a preset waits for windows to appear; everything else is quick.
+    signal.alarm(120 if args.action == 'open' else 30)
     try:
         if args.action == 'form':
             print(json.dumps(form(args.config, args.id)))
             return 0
         if args.action in ('save', 'delete'):
-            print(json.dumps(manage(args.config, args.action, json.loads(sys.stdin.readline()))))
+            print(json.dumps(manage(args.config, args.action, json.loads(read_request()))))
             return 0
         presets = load(args.config)
         if args.action == 'list':
