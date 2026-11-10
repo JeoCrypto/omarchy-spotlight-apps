@@ -83,7 +83,10 @@ Item {
   property var pinned: defaultPinned
 
   FileView {
+    id: pinnedFile
     path: root.home + "/.config/glass-dock/pinned"
+    watchChanges: true
+    onFileChanged: reload()
     __printErrors: false
     onLoaded: root.pinned = text().split("\n").map(s => s.trim()).filter(s => s && !s.startsWith("#"))
     onLoadFailed: root.pinned = root.defaultPinned
@@ -390,6 +393,35 @@ Item {
     else close()
   }
 
+  // ---- Dock: right-click an app to keep it in the Glass Dock, or remove it ----
+  // Returns the line in ~/.config/glass-dock/pinned that puts this app in the
+  // dock, or "" when it isn't there.
+  function pinnedLine(item) {
+    if (!item || item.kind !== "app") return ""
+    for (const id of pinned) {
+      const e = DesktopEntries.byId(id) || DesktopEntries.heuristicLookup(id)
+      if (e && e.id === item.id) return id
+    }
+    return ""
+  }
+
+  // The folder has to exist before the first save.
+  Component.onCompleted: Quickshell.execDetached(["mkdir", "-p", root.home + "/.config/glass-dock"])
+
+  function togglePinned(item) {
+    if (!item || item.kind !== "app") return
+    const line = pinnedLine(item)
+    // Keep comments and blank lines; without a file, start from the defaults.
+    let lines
+    try { lines = pinnedFile.text().split("\n") } catch (e) { lines = [] }
+    if (lines.filter(l => l.trim() && !l.trim().startsWith("#")).length === 0 && root.pinned === root.defaultPinned)
+      lines = root.defaultPinned.slice()
+    while (lines.length && lines[lines.length - 1].trim() === "") lines.pop()
+    lines = line ? lines.filter(l => l.trim() !== line) : lines.concat([item.id])
+    pinnedFile.setText(lines.join("\n") + "\n")
+    root.pinned = lines.map(l => l.trim()).filter(l => l && !l.startsWith("#"))
+  }
+
   function activate(item) {
     if (!item || item.kind === "spacer") return
     if (item.kind === "action") { query = ""; chip = item.page; refreshDesktop(); return }
@@ -506,7 +538,7 @@ Item {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             visible: !search.text
-            text: "Search apps, settings & workspaces"
+            text: "Search  ·  right-click an app for the Dock"
             color: root.alpha(root.fg, 0.4)
             font: search.font
           }
@@ -628,6 +660,11 @@ Item {
           current: index === root.currentIndex
           onHovered: if (root.selectable(index)) root.currentIndex = index
           onActivated: root.activate(modelData)
+          inDock: root.pinnedLine(modelData) !== ""
+          onSecondary: {
+            flash(inDock ? "Removed from Dock" : "Kept in Dock")
+            root.togglePinned(modelData)
+          }
         }
       }
 
@@ -701,6 +738,12 @@ Item {
     property bool current: false
     signal hovered()
     signal activated()
+    // Right-click on an app: keep it in the dock or remove it.
+    signal secondary()
+    property bool inDock: false
+    property string flashText: ""
+    function flash(message) { flashText = message; flashTimer.restart() }
+    Timer { id: flashTimer; interval: 1400; onTriggered: tile.flashText = "" }
 
     readonly property bool isSpacer: !item || item.kind === "spacer"
     width: root.cellWidth
@@ -738,19 +781,32 @@ Item {
       x: 4
       y: 8 + root.iconSize + 7
       width: parent.width - 8
-      text: tile.item ? tile.item.name : ""
-      color: root.fg
+      text: tile.flashText !== "" ? tile.flashText : (tile.item ? tile.item.name : "")
+      textFormat: Text.PlainText
+      color: tile.flashText !== "" ? root.accent : root.fg
       horizontalAlignment: Text.AlignHCenter
       elide: Text.ElideRight
       font.family: "sans-serif"
       font.pixelSize: 12
     }
 
+    // Small accent dot on apps that are in the dock.
+    Rectangle {
+      visible: tile.inDock && tile.item && tile.item.kind === "app"
+      x: (parent.width + root.iconSize) / 2 - 4
+      y: 6
+      width: 8; height: 8; radius: 4
+      color: root.accent
+      border.width: 1
+      border.color: root.alpha(root.bg, 0.6)
+    }
+
     MouseArea {
       enabled: !tile.isSpacer
       anchors.fill: parent
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
       cursorShape: Qt.PointingHandCursor
-      onClicked: tile.activated()
+      onClicked: (e) => e.button === Qt.RightButton ? tile.secondary() : tile.activated()
     }
 
     // MouseArea hover doesn't fire for warped pointers; HoverHandler does.

@@ -91,7 +91,7 @@ The demo above shows app search and settings; the workspace tools below are incl
   </tr>
 </table>
 
-Your pinned apps sit in a suggested row above every app in alphabetical order. The row is shared with [Glass Dock](https://github.com/JeoCrypto/omarchy-glass-dock). Hidden apps match Omarchy's own Apps menu (`launcher.hides`).
+Your pinned apps sit in a suggested row above every app in alphabetical order. The row is shared with [Glass Dock](https://github.com/JeoCrypto/omarchy-glass-dock). **Right-click any app** to keep it in the dock, or to remove it; an orange dot marks the apps that are already there. Hidden apps match Omarchy's own Apps menu (`launcher.hides`).
 
 ## Workspace presets
 
@@ -169,7 +169,7 @@ Click an app to open it. Click outside the panel, or the × button, to close it.
 |---|---|
 | `~/.config/omarchy/workspace-presets.json` | Saved presets. Edit through Spotlight or customize app commands in this file. |
 | `~/.local/state/omarchy/backup-status.json` | Snapshot and job status written by the backup tracker. |
-| `~/.config/glass-dock/pinned` | The suggested row: one desktop-file id per line (shared with Glass Dock). Without it, Files, Chromium and Foot are suggested. |
+| `~/.config/glass-dock/pinned` | The suggested row: one desktop-file id per line (shared with Glass Dock). Without it, Files, Chromium and Foot are suggested. Right-clicking an app edits this file for you. |
 
 The Settings tiles, the categories and the sizes are defined at the top of `Launchpad.qml`.
 
@@ -224,6 +224,7 @@ Tests cover preset creation/editing/deletion, stale edits, workspace selection, 
   <b>Part of the Golden Gate set for Omarchy</b><br>
   <a href="https://github.com/JeoCrypto/omarchy-golden-gate-theme">Golden Gate theme</a> ·
   <a href="https://github.com/JeoCrypto/omarchy-glass-dock">Glass Dock</a> ·
+  <a href="https://github.com/JeoCrypto/omarchy-control-center">Control Center</a> ·
   <a href="https://github.com/JeoCrypto/omarchy-spotlight-apps">Spotlight Apps</a> ·
   <a href="https://github.com/JeoCrypto/omarchy-snap-layouts">Snap Layouts</a>
 </p>
