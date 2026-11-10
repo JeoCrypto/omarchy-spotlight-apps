@@ -28,7 +28,7 @@ widget = config / 'plugins/jeo.backup'
 if widget.exists():
     shutil.copytree(widget, backup / 'backup-widget')
 widget.mkdir(parents=True, exist_ok=True)
-for name in ['BarWidget.qml', 'manifest.json']:
+for name in ['BarWidget.qml', 'BoundedRun.qml', 'manifest.json']:
     shutil.copy2(source / 'addons/jeo.backup' / name, widget / name)
 shell_path = config / 'shell.json'
 settings = json.loads(shell_path.read_text())

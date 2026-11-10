@@ -95,8 +95,9 @@ Item {
   // ---- Workspace presets: validated by the bundled helper ----
   property var workspaceItems: []
   property string workspaceError: ""
-  // Every helper below runs through BoundedRun: a time limit, capped output
-  // and no leftover processes.
+  // Every helper below runs through BoundedRun: a time limit, capped output,
+  // exactly one `finished` per run (also when the helper cannot be started or
+  // overruns) and no leftover processes.
   BoundedRun {
     id: presetList
     argv: [root.home + "/.local/bin/workspace-presets", "list"]
@@ -413,8 +414,9 @@ Item {
     pinnedSave.flashId = item.id
     pinnedSave.doneMessage = line ? "Removed from Dock" : "Kept in Dock"
     pinnedSave.start(["sh", "-c",
-      'dir=$1; tmp=; trap \'[ -n "$tmp" ] && rm -f -- "$tmp"\' EXIT; ' +
-      'mkdir -p -- "$dir" && tmp=$(mktemp "$dir/.pinned.XXXXXX") && printf %s "$2" > "$tmp" && mv -f -- "$tmp" "$dir/pinned" && tmp=',
+      'dir=$1; tmp=; clean() { [ -n "$tmp" ] && rm -f -- "$tmp"; }; trap clean EXIT; trap "clean; exit 1" TERM INT HUP; ' +
+      'mkdir -p -- "$dir" && find "$dir" -maxdepth 1 -name ".pinned.??????" -mmin +1 -delete && ' +
+      'tmp=$(mktemp "$dir/.pinned.XXXXXX") && printf %s "$2" > "$tmp" && mv -f -- "$tmp" "$dir/pinned" && tmp=',
       "sh", root.home + "/.config/glass-dock", content])
   }
   BoundedRun {

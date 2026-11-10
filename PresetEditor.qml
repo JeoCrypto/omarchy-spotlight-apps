@@ -21,6 +21,8 @@ Rectangle {
   signal cancelled()
 
   function show(data) {
+    // A paste still being read belongs to the form as it was.
+    nameField.dropPaste(); directoryField.dropPaste(); websiteField.dropPaste()
     original = data
     nameField.text = data.name
     directoryField.text = data.directory
@@ -109,6 +111,7 @@ Rectangle {
     property alias text: input.text
     property string placeholder: ""
     function forceActiveFocus() { input.forceActiveFocus() }
+    function dropPaste() { fieldPaste.invalidate() }
     spacing: 6
     Text { text: parent.label; color: editor.foreground; font.pixelSize: 12; opacity: 0.7 }
     TextField {

@@ -217,7 +217,7 @@ python3 -m unittest discover -s tests -v
 bash -n install-presets.sh install-desktop.sh bin/workspace-project-shell
 ```
 
-Tests cover preset creation/editing/deletion, stale edits, oversized or locked configuration files, workspace selection, virtual-environment prompts and backup state. They do not launch real desktop apps or run a real backup.
+Tests cover preset creation/editing/deletion, stale edits, oversized or locked configuration files, workspace selection, virtual-environment prompts and backup state. They do not launch real desktop apps or run a real backup. They also cover the helper runner (one report per run, including a helper that cannot be started or overruns, and no processes left behind) and pasting (a paste that arrives after the field changed is dropped). The Quickshell cases run in a throwaway Quickshell instance and are skipped without Quickshell and a Wayland session. The real clipboard is not read.
 
 ---
 
@@ -230,4 +230,4 @@ Tests cover preset creation/editing/deletion, stale edits, oversized or locked c
   <a href="https://github.com/JeoCrypto/omarchy-snap-layouts">Snap Layouts</a>
 </p>
 
-<p align="center"><sub>MIT licence</sub></p>
+<p align="center"><sub>Contributed by <a href="https://vgsi.pt">VGSI</a> · MIT licence</sub></p>
